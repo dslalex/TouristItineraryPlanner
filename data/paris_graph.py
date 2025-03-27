@@ -89,10 +89,29 @@ def load_graph(filename=GRAPH_FILE):
 def display_graph_window(G):
     pos = {n: (G.nodes[n]["longitude"], G.nodes[n]["latitude"]) for n in G.nodes()}
     plt.figure(figsize=(10, 8))
+    
+    # Extract node attributes for visualization
+    node_types = [G.nodes[n].get("Type", "Unknown") for n in G.nodes()]
+    node_interest = [G.nodes[n].get("Interet", 5) for n in G.nodes()]
+    node_sizes = [max(30, n * 10) for n in node_interest]  # Scale interest to node size
+    
+    # Color nodes by type
+    color_map = {"Touristique": "blue", "Restaurant": "red", "Unknown": "gray"}
+    node_colors = [color_map.get(t, "gray") for t in node_types]
+    
+    # Draw the graph
     nx.draw_networkx_edges(G, pos, alpha=0.2)
-    nx.draw_networkx_nodes(G, pos, node_size=50, node_color="blue")
+    nx.draw_networkx_nodes(G, pos, node_size=node_sizes, node_color=node_colors, alpha=0.7)
+    
+    # Add labels for important nodes
     labels = {n: G.nodes[n]["Nom"] for n in G.nodes() if n <= 50}
     nx.draw_networkx_labels(G, pos, labels, font_size=8)
+    
+    # Add legend
+    for type_name, color in color_map.items():
+        plt.plot([], [], 'o', color=color, label=type_name)
+    plt.legend(loc="best")
+    
     plt.title("Paris Locations Graph (Positioned by Latitude and Longitude)")
     plt.xlabel("Longitude")
     plt.ylabel("Latitude")
