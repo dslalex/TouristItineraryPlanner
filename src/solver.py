@@ -15,28 +15,24 @@ class TouristItinerarySolver:
     
     def __init__(self, graph=None, start_time="09:00", end_time="19:00", 
                  mandatory_visits=None, max_visits_by_type=None, api_key=None, max_neighbors=5):
-        """Initialize the solver with tour parameters.
-        
-        Args:
-            graph: NetworkX graph containing POIs and travel times
-            start_time: Starting time for the tour (HH:MM format)
-            end_time: Ending time for the tour (HH:MM format)
-            mandatory_visits: List of POI IDs that must be visited
-            max_visits_by_type: Dict of {type: max_count} for category limits
-            api_key: OpenAI API key for distance calculations
-            max_neighbors: Maximum number of nearest neighbors to precompute
-        """
+        """Initialize the solver with tour parameters."""
         self.graph = graph if graph else load_graph()
         self.start_time = self._time_to_minutes(start_time)
         self.end_time = self._time_to_minutes(end_time)
         self.total_available_time = self.end_time - self.start_time
         self.mandatory_visits = mandatory_visits if mandatory_visits else []
         self.max_visits_by_type = max_visits_by_type if max_visits_by_type else {}
-        self.transport_mode = 1  # 0: walk, 1: public transport, 2: car
         self.distance_calculator = DistanceCalculator(api_key)
         self.max_neighbors = max_neighbors
         self.nearest_neighbors = self._precompute_nearest_neighbors()
+        
+        # Define transport mode preferences and thresholds
+        self.transport_modes = [0, 1, 2]  # 0: walk, 1: public transport, 2: car
+        self.walking_threshold = 1.5      # km - prefer walking for distances up to this value
+        self.public_transport_threshold = 5.0  # km - prefer public transport for distances up to this value
+        
         print(f"Precomputed {max_neighbors} nearest neighbors for each POI")
+        print(f"Transport mode preferences: Walk -> Public Transport -> Car")
         
     def _time_to_minutes(self, time_str):
         """Convert time string (HH:MM) to minutes since midnight."""
@@ -101,38 +97,110 @@ class TouristItinerarySolver:
         return nearest_neighbors
     
     def get_travel_time(self, poi_i, poi_j):
-        """Get travel time between two POIs using the API."""
+        """Get travel time between two POIs using the API, prioritizing walking, then public transport, then car."""
         # Check if we have pre-computed travel times in the edge data
+        all_modes_computed = False
         if 'travel_times' in self.graph[poi_i][poi_j]:
-            return self.graph[poi_i][poi_j]['travel_times'][self.transport_mode]
+            if all(self.graph[poi_i][poi_j]['travel_times'][mode] is not None for mode in range(3)):
+                all_modes_computed = True
+        
+        # If all transport modes are already computed, select the preferred one
+        if all_modes_computed:
+            return self._select_preferred_transport_mode(poi_i, poi_j)
+        
+        # Calculate distance between POIs for heuristic
+        distance_km = self._calculate_haversine_distance(
+            self.graph.nodes[poi_i]['latitude'], 
+            self.graph.nodes[poi_i]['longitude'],
+            self.graph.nodes[poi_j]['latitude'], 
+            self.graph.nodes[poi_j]['longitude']
+        )
+        
+        # Initialize travel_times if not present
+        if 'travel_times' not in self.graph[poi_i][poi_j]:
+            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
         
         # If poi_j is in the nearest neighbors of poi_i, use the API
         if poi_j in self.nearest_neighbors[poi_i]:
-            # Use the API to calculate travel time
             origin = self.graph.nodes[poi_i]
             destination = self.graph.nodes[poi_j]
             
-            travel_time = self.distance_calculator.get_travel_time(
-                origin, destination, self.transport_mode)
-            
-            # Store for future use
-            if 'travel_times' not in self.graph[poi_i][poi_j]:
-                self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
-            self.graph[poi_i][poi_j]['travel_times'][self.transport_mode] = travel_time
-            
-            return travel_time
+            # Compute travel times for all transport modes (if not already computed)
+            for mode in self.transport_modes:
+                if self.graph[poi_i][poi_j]['travel_times'][mode] is None:
+                    travel_time = self.distance_calculator.get_travel_time(
+                        origin, destination, mode)
+                    self.graph[poi_i][poi_j]['travel_times'][mode] = travel_time
         else:
-            # Use the fallback calculation for non-neighbors
+            # Use fallback calculation for non-neighbors
             origin = self.graph.nodes[poi_i]
             destination = self.graph.nodes[poi_j]
-            travel_time = self.distance_calculator._fallback_travel_time(origin, destination, self.transport_mode)
             
-            # Store for future use
-            if 'travel_times' not in self.graph[poi_i][poi_j]:
-                self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
-            self.graph[poi_i][poi_j]['travel_times'][self.transport_mode] = travel_time
-            
-            return travel_time
+            for mode in self.transport_modes:
+                if self.graph[poi_i][poi_j]['travel_times'][mode] is None:
+                    travel_time = self.distance_calculator._fallback_travel_time(
+                        origin, destination, mode)
+                    self.graph[poi_i][poi_j]['travel_times'][mode] = travel_time
+        
+        # Select the preferred transport mode based on our heuristic
+        return self._select_preferred_transport_mode(poi_i, poi_j)
+
+    def _select_preferred_transport_mode(self, poi_i, poi_j):
+        """Select the preferred transport mode based on distance and travel time heuristics."""
+        travel_times = self.graph[poi_i][poi_j]['travel_times']
+        distance_km = self._calculate_haversine_distance(
+            self.graph.nodes[poi_i]['latitude'], 
+            self.graph.nodes[poi_i]['longitude'],
+            self.graph.nodes[poi_j]['latitude'], 
+            self.graph.nodes[poi_j]['longitude']
+        )
+        
+        # Get chosen transport mode and travel time
+        chosen_mode = 1  # Default to public transport
+        chosen_time = travel_times[1]
+        
+        # Priority 1: Walking for short distances (if reasonable time)
+        if distance_km <= self.walking_threshold:
+            walk_time = travel_times[0]
+            if walk_time <= 25:  # 25 minutes is reasonable walking time
+                chosen_mode = 0
+                chosen_time = walk_time
+        
+        # Priority 2: Public transport for medium distances
+        elif distance_km <= self.public_transport_threshold:
+            chosen_mode = 1
+            chosen_time = travel_times[1]
+        
+        # Priority 3: Car for longer distances
+        else:
+            chosen_mode = 2
+            chosen_time = travel_times[2]
+        
+        # Log the chosen transport mode
+        mode_names = ["walking", "public transport", "car"]
+        print(f"Selected {mode_names[chosen_mode]} for travel from {self.graph.nodes[poi_i]['Nom']} to {self.graph.nodes[poi_j]['Nom']}")
+        
+        # Store the selected transport mode
+        self.graph[poi_i][poi_j]['selected_mode'] = chosen_mode
+        
+        return chosen_time
+
+    def _calculate_haversine_distance(self, lat1, lon1, lat2, lon2):
+        """Calculate the haversine distance between two points in kilometers."""
+        # Convert latitude and longitude from degrees to radians
+        lat1 = math.radians(lat1)
+        lon1 = math.radians(lon1)
+        lat2 = math.radians(lat2)
+        lon2 = math.radians(lon2)
+        
+        # Haversine formula
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        r = 6371  # Radius of Earth in kilometers
+        
+        return c * r
     
     def solve(self, max_pois=10):
         """Solve the Tourist Trip Design Problem.
@@ -279,14 +347,7 @@ class TouristItinerarySolver:
             return None
 
     def format_itinerary(self, itinerary):
-        """Format the solution as a readable itinerary.
-        
-        Args:
-            itinerary: List of (poi_id, arrival_time, departure_time) tuples
-            
-        Returns:
-            A string representing the formatted itinerary
-        """
+        """Format the solution as a readable itinerary."""
         if not itinerary:
             return "No feasible itinerary found."
             
@@ -311,9 +372,16 @@ class TouristItinerarySolver:
             # Add travel information if not the last POI
             if idx < len(itinerary) - 1:
                 next_poi_id = itinerary[idx+1][0]
-                travel_time = self.graph[poi_id][next_poi_id]['travel_times'][self.transport_mode]
                 
-                transport_mode_str = ["walking", "public transport", "car"][self.transport_mode]
+                # Get the selected transport mode and travel time
+                if 'selected_mode' in self.graph[poi_id][next_poi_id]:
+                    selected_mode = self.graph[poi_id][next_poi_id]['selected_mode']
+                else:
+                    selected_mode = 1  # Default to public transport
+                    
+                travel_time = self.graph[poi_id][next_poi_id]['travel_times'][selected_mode]
+                
+                transport_mode_str = ["walking", "public transport", "car"][selected_mode]
                 result += f"   Travel to next: {travel_time} minutes by {transport_mode_str}\n"
             
             result += "\n"
@@ -323,11 +391,23 @@ class TouristItinerarySolver:
         total_time = itinerary[-1][2] - itinerary[0][1]
         total_cost = sum(self.graph.nodes[poi_id]['cout'] for poi_id, _, _ in itinerary)
         
+        # Calculate transport mode distribution
+        transport_counts = {"walking": 0, "public transport": 0, "car": 0}
+        for idx in range(len(itinerary) - 1):
+            current_poi_id = itinerary[idx][0]
+            next_poi_id = itinerary[idx+1][0]
+            
+            if 'selected_mode' in self.graph[current_poi_id][next_poi_id]:
+                selected_mode = self.graph[current_poi_id][next_poi_id]['selected_mode']
+                mode_name = ["walking", "public transport", "car"][selected_mode]
+                transport_counts[mode_name] += 1
+        
         result += f"Summary:\n"
         result += f"Total POIs visited: {len(itinerary)}\n"
         result += f"Total interest score: {total_interest}\n"
         result += f"Total time (including travel): {total_time} minutes\n"
         result += f"Total cost: €{total_cost}\n"
+        result += f"Transport modes used: {transport_counts}\n"
         
         return result
     
