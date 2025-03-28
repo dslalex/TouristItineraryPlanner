@@ -66,12 +66,9 @@ def create_graph():
     for loc in known_locations:
         G.add_node(loc["ID"], **loc)
 
-    # Time estimations
+    # Add edges without travel times - they will be calculated on demand
     for u, v in itertools.combinations(G.nodes(), 2):
-        walk_time = 10 + ((u + v) % 21)
-        transport_time = 5 + ((u + v) % 16)
-        car_time = 3 + ((u + v) % 8)
-        G.add_edge(u, v, travel_times=(walk_time, transport_time, car_time))
+        G.add_edge(u, v)
     
     return G
 
