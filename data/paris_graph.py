@@ -78,10 +78,17 @@ def save_graph(G, filename=GRAPH_FILE):
     print(f"Graph saved to {filename}")
 
 def load_graph(filename=GRAPH_FILE):
-    with open(filename, "rb") as f:
-        G = pickle.load(f)
-    print(f"Graph loaded from {filename}")
-    return G
+    """Load the Paris graph from a file or create it if not found."""
+    try:
+        with open(filename, 'rb') as f:
+            G = pickle.load(f)
+        print(f"Loaded existing Paris graph with {len(G.nodes())} nodes")
+        return G
+    except (FileNotFoundError, IOError):
+        print("Creating new Paris graph")
+        G = create_graph()
+        save_graph(G, filename)
+        return G
 
 def display_graph_window(G):
     pos = {n: (G.nodes[n]["longitude"], G.nodes[n]["latitude"]) for n in G.nodes()}

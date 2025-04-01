@@ -7,32 +7,122 @@ from dotenv import load_dotenv
 
 # Add project root to path to allow imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from data.paris_graph import load_graph
+from data.city_graph import load_graph
 from src.distance_api import DistanceCalculator
+from src.city_generator import generate_city_data
 
 class TouristItinerarySolver:
     """Solver for the Tourist Trip Design Problem using constraint programming."""
     
-    def __init__(self, graph=None, start_time="09:00", end_time="19:00", 
+    def __init__(self, city="paris", graph=None, start_time="09:00", end_time="19:00", 
                  mandatory_visits=None, max_visits_by_type=None, api_key=None, max_neighbors=5):
         """Initialize the solver with tour parameters."""
-        self.graph = graph if graph else load_graph()
+        self.city = city.lower()
+        
+        # Try to load the city graph
+        if graph is None:
+            self.graph = load_graph(city)
+            
+            # If city graph doesn't exist, generate it
+            if self.graph is None and api_key:
+                print(f"No data found for {city}. Generating new city data...")
+                self.graph = generate_city_data(city, api_key)
+                
+                if self.graph is None:
+                    raise ValueError(f"Could not generate data for {city}. Please try again.")
+            elif self.graph is None:
+                raise ValueError(f"No data found for {city} and no API key provided to generate data.")
+        else:
+            self.graph = graph
+        
+        # Ensure all graph node IDs are integers
+        self._ensure_integer_nodes()
+        
+        # Setting tour parameters
         self.start_time = self._time_to_minutes(start_time)
         self.end_time = self._time_to_minutes(end_time)
         self.total_available_time = self.end_time - self.start_time
-        self.mandatory_visits = mandatory_visits if mandatory_visits else []
-        self.max_visits_by_type = max_visits_by_type if max_visits_by_type else {}
-        self.distance_calculator = DistanceCalculator(api_key)
-        self.max_neighbors = max_neighbors
-        self.nearest_neighbors = self._precompute_nearest_neighbors()
         
-        # Define transport mode preferences and thresholds
-        self.transport_modes = [0, 1, 2]  # 0: walk, 1: public transport, 2: car
-        self.walking_threshold = 1.5      # km - prefer walking for distances up to this value
-        self.public_transport_threshold = 5.0  # km - prefer public transport for distances up to this value
+        # Setting visit constraints
+        self.mandatory_visits = mandatory_visits or []
+        # Ensure mandatory_visits are integers
+        if self.mandatory_visits:
+            new_mandatory = []
+            for poi_id in self.mandatory_visits:
+                try:
+                    new_mandatory.append(int(poi_id))
+                except (ValueError, TypeError):
+                    print(f"Warning: Skipping mandatory visit {poi_id} - not a valid integer")
+            self.mandatory_visits = new_mandatory
+            
+            # Verify mandatory visits exist in the graph
+            for poi_id in self.mandatory_visits:
+                if poi_id not in self.graph.nodes():
+                    print(f"Warning: Mandatory POI {poi_id} not found in graph")
+        self.max_visits_by_type = max_visits_by_type or {}
+        
+        # Travel parameters
+        self.api_key = api_key
+        self.max_neighbors = max_neighbors
+        self.transport_modes = ["walking", "public transport", "car"]
+        self.walking_threshold = 1.0  # km
+        self.public_transport_threshold = 5.0  # km
+        
+        # Create distance calculator
+        self.distance_calculator = DistanceCalculator(api_key)
+        
+        # Precompute nearest neighbors for each POI to reduce API calls
+        self.nearest_neighbors = self._precompute_nearest_neighbors()
         
         print(f"Precomputed {max_neighbors} nearest neighbors for each POI")
         print(f"Transport mode preferences: Walk -> Public Transport -> Car")
+        
+        # Print summary of initialization
+        print(f"Initialized solver for {self.city} with {len(self.graph.nodes())} POIs")
+        print(f"Mandatory visits: {self.mandatory_visits}")
+        print(f"Time window: {self._minutes_to_time_str(self.start_time)} - {self._minutes_to_time_str(self.end_time)}")
+    
+    def _ensure_integer_nodes(self):
+        """Ensure all graph node IDs are integers to prevent index errors."""
+        print("Checking graph node types...")
+        needs_conversion = False
+        
+        # Check if any node ID is not an integer
+        for node in list(self.graph.nodes()):
+            if not isinstance(node, int):
+                needs_conversion = True
+                break
+        
+        if not needs_conversion:
+            print("All node IDs are already integers.")
+            return
+        
+        # Create a new graph with integer node IDs
+        print("Converting node IDs to integers...")
+        int_graph = nx.Graph()
+        
+        # Copy nodes with integer IDs
+        for node in self.graph.nodes():
+            try:
+                int_node = int(node)
+                int_graph.add_node(int_node, **self.graph.nodes[node])
+            except (ValueError, TypeError):
+                print(f"Warning: Skipping node {node} because ID cannot be converted to integer")
+        
+        # Copy edges
+        for u, v in self.graph.edges():
+            try:
+                int_u = int(u)
+                int_v = int(v)
+                # Copy all edge attributes
+                edge_attrs = self.graph.get_edge_data(u, v)
+                int_graph.add_edge(int_u, int_v, **edge_attrs)
+            except (ValueError, TypeError):
+                print(f"Warning: Skipping edge {u}-{v} because IDs cannot be converted to integers")
+        
+        # Replace the graph
+        self.graph = int_graph
+        print(f"Graph now has {len(self.graph.nodes())} nodes with integer IDs.")
         
     def _time_to_minutes(self, time_str):
         """Convert time string (HH:MM) to minutes since midnight."""
@@ -96,58 +186,69 @@ class TouristItinerarySolver:
         
         return nearest_neighbors
     
-    def get_travel_time(self, poi_i, poi_j):
-        """Get travel time between two POIs using the API, prioritizing walking, then public transport, then car."""
-        # Check if we have pre-computed travel times in the edge data
-        all_modes_computed = False
-        if 'travel_times' in self.graph[poi_i][poi_j]:
-            if all(self.graph[poi_i][poi_j]['travel_times'][mode] is not None for mode in range(3)):
-                all_modes_computed = True
+    def get_travel_time(self, poi_i, poi_j, mode=None):
+        """Get travel time between two POIs in minutes."""
+        # Handle mode selection or default
+        if mode is None:
+            # Here's the fix - we need to get both the mode and time
+            preferred_mode, travel_time = self._select_preferred_transport_mode(poi_i, poi_j)
+            return travel_time  # Return the time directly
         
-        # If all transport modes are already computed, select the preferred one
-        if all_modes_computed:
-            return self._select_preferred_transport_mode(poi_i, poi_j)
+        # Ensure POI IDs are integers
+        poi_i = int(poi_i)
+        poi_j = int(poi_j)
         
-        # Calculate distance between POIs for heuristic
-        distance_km = self._calculate_haversine_distance(
-            self.graph.nodes[poi_i]['latitude'], 
-            self.graph.nodes[poi_i]['longitude'],
-            self.graph.nodes[poi_j]['latitude'], 
-            self.graph.nodes[poi_j]['longitude']
-        )
+        # If same POI, no travel time
+        if poi_i == poi_j:
+            return 0
         
-        # Initialize travel_times if not present
+        # Convert mode to integer index if it's a string
+        mode_index = mode
+        if isinstance(mode, str):
+            # Convert string mode to numeric index
+            mode_map = {"walking": 0, "public_transport": 1, "car": 2}
+            mode_index = mode_map.get(mode.lower(), 0)  # Default to walking (0) if unknown
+        
+        # Ensure mode_index is within valid range
+        if not isinstance(mode_index, int) or mode_index < 0 or mode_index > 2:
+            print(f"Warning: Invalid mode_index {mode_index}, defaulting to 0")
+            mode_index = 0
+        
+        # Initialize travel_times dictionary if it doesn't exist
         if 'travel_times' not in self.graph[poi_i][poi_j]:
-            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
+            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]  # One slot for each transport mode
         
-        # If poi_j is in the nearest neighbors of poi_i, use the API
-        if poi_j in self.nearest_neighbors[poi_i]:
+        # Check if travel time is already calculated
+        if self.graph[poi_i][poi_j]['travel_times'][mode_index] is None:
+            # Calculate travel time using the distance calculator
             origin = self.graph.nodes[poi_i]
             destination = self.graph.nodes[poi_j]
+            travel_time = self.distance_calculator.get_travel_time(origin, destination, mode_index)
             
-            # Compute travel times for all transport modes (if not already computed)
-            for mode in self.transport_modes:
-                if self.graph[poi_i][poi_j]['travel_times'][mode] is None:
-                    travel_time = self.distance_calculator.get_travel_time(
-                        origin, destination, mode)
-                    self.graph[poi_i][poi_j]['travel_times'][mode] = travel_time
-        else:
-            # Use fallback calculation for non-neighbors
-            origin = self.graph.nodes[poi_i]
-            destination = self.graph.nodes[poi_j]
-            
-            for mode in self.transport_modes:
-                if self.graph[poi_i][poi_j]['travel_times'][mode] is None:
-                    travel_time = self.distance_calculator._fallback_travel_time(
-                        origin, destination, mode)
-                    self.graph[poi_i][poi_j]['travel_times'][mode] = travel_time
+            # Store the travel time
+            self.graph[poi_i][poi_j]['travel_times'][mode_index] = travel_time
         
-        # Select the preferred transport mode based on our heuristic
-        return self._select_preferred_transport_mode(poi_i, poi_j)
+        return self.graph[poi_i][poi_j]['travel_times'][mode_index]
 
     def _select_preferred_transport_mode(self, poi_i, poi_j):
         """Select the preferred transport mode based on distance and travel time heuristics."""
+        # Ensure POI IDs are integers
+        poi_i = int(poi_i)
+        poi_j = int(poi_j)
+        
+        # Initialize travel_times if it doesn't exist
+        if 'travel_times' not in self.graph[poi_i][poi_j]:
+            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]  # One slot for each transport mode
+        
         travel_times = self.graph[poi_i][poi_j]['travel_times']
+        
+        # Calculate travel times for each mode if they don't exist
+        for mode_idx in range(3):
+            if travel_times[mode_idx] is None:
+                origin = self.graph.nodes[poi_i]
+                destination = self.graph.nodes[poi_j]
+                travel_times[mode_idx] = self.distance_calculator.get_travel_time(origin, destination, mode_idx)
+        
         distance_km = self._calculate_haversine_distance(
             self.graph.nodes[poi_i]['latitude'], 
             self.graph.nodes[poi_i]['longitude'],
@@ -183,7 +284,8 @@ class TouristItinerarySolver:
         # Store the selected transport mode
         self.graph[poi_i][poi_j]['selected_mode'] = chosen_mode
         
-        return chosen_time
+        # Return both the chosen mode and the travel time
+        return chosen_mode, chosen_time
 
     def _calculate_haversine_distance(self, lat1, lon1, lat2, lon2):
         """Calculate the haversine distance between two points in kilometers."""
@@ -211,10 +313,19 @@ class TouristItinerarySolver:
         Returns:
             A list of tuples (poi_id, arrival_time, departure_time) representing the itinerary
         """
+        # Ensure all POIs have integer IDs
+        pois = []
+        for node in self.graph.nodes():
+            try:
+                pois.append(int(node))
+            except (ValueError, TypeError):
+                print(f"Warning: Skipping POI {node} - not a valid integer ID")
+
+        print(f"Solving model with {len(pois)} POIs...")
+        
         model = cp_model.CpModel()
         
         # Extract POIs and their attributes from the graph
-        pois = list(self.graph.nodes())
         n_pois = len(pois)
         
         # Create variables
@@ -429,31 +540,40 @@ def main():
         print("Warning: No OpenAI API key found in .env file. Please add OPENAI_API_KEY to your .env file.")
         return
     
-    # Load the graph
-    graph = load_graph()
+    # Get city name from command line argument or use default
+    import argparse
+    parser = argparse.ArgumentParser(description='Tourist Itinerary Planner')
+    parser.add_argument('--city', type=str, default='paris', help='City to plan itinerary for')
+    args = parser.parse_args()
+    
+    city = args.city.lower()
+    print(f"Planning itinerary for {city.title()}...")
     
     # Create a solver with default parameters
-    solver = TouristItinerarySolver(
-        graph=graph, 
-        start_time="09:00", 
-        end_time="20:00",
-        mandatory_visits=[1],  # Tour Eiffel is mandatory
-        max_visits_by_type={"Restaurant": 2, "Touristique": 10},
-        api_key=api_key,
-        max_neighbors=5  # Only consider the 5 nearest POIs for API requests
-    )
-    
-    # Solve the problem
-    print("Solving the tourist itinerary planning problem...")
-    itinerary = solver.solve(max_pois=8)
-    
-    # Print the solution
-    print(solver.format_itinerary(itinerary))
-    
-    # Print API request statistics
-    print(f"\nAPI Request Statistics:")
-    print(f"Total API requests made: {solver.distance_calculator.request_count}")
-
+    try:
+        solver = TouristItinerarySolver(
+            city=city,
+            start_time="09:00", 
+            end_time="20:00",
+            mandatory_visits=[1],  # First attraction is mandatory (should be iconic landmark)
+            max_visits_by_type={"Restaurant": 2, "Touristique": 10},
+            api_key=api_key,
+            max_neighbors=5  # Only consider the 5 nearest POIs for API requests
+        )
+        
+        # Solve the problem
+        print("Solving the tourist itinerary planning problem...")
+        itinerary = solver.solve(max_pois=8)
+        
+        # Print the solution
+        print(solver.format_itinerary(itinerary))
+        
+        # Print API request statistics
+        print(f"\nAPI Request Statistics:")
+        print(f"Total API requests made: {solver.distance_calculator.request_count}")
+        
+    except Exception as e:
+        print(f"Error planning itinerary: {e}")
 
 if __name__ == "__main__":
     main()
