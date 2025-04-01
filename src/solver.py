@@ -188,12 +188,6 @@ class TouristItinerarySolver:
     
     def get_travel_time(self, poi_i, poi_j, mode=None):
         """Get travel time between two POIs in minutes."""
-        # Handle mode selection or default
-        if mode is None:
-            # Here's the fix - we need to get both the mode and time
-            preferred_mode, travel_time = self._select_preferred_transport_mode(poi_i, poi_j)
-            return travel_time  # Return the time directly
-        
         # Ensure POI IDs are integers
         poi_i = int(poi_i)
         poi_j = int(poi_j)
@@ -202,30 +196,32 @@ class TouristItinerarySolver:
         if poi_i == poi_j:
             return 0
         
-        # Convert mode to integer index if it's a string
+        # Check if poi_j is among the nearest neighbors of poi_i
+        # If not, return a very large travel time to discourage this connection
+        if poi_j not in self.nearest_neighbors.get(poi_i, []):
+            return 9999  # Large penalty value
+        
+        # Handle mode selection or default
+        if mode is None:
+            preferred_mode, travel_time = self._select_preferred_transport_mode(poi_i, poi_j)
+            return travel_time
+        
         mode_index = mode
         if isinstance(mode, str):
-            # Convert string mode to numeric index
             mode_map = {"walking": 0, "public_transport": 1, "car": 2}
-            mode_index = mode_map.get(mode.lower(), 0)  # Default to walking (0) if unknown
+            mode_index = mode_map.get(mode.lower(), 0)
         
-        # Ensure mode_index is within valid range
         if not isinstance(mode_index, int) or mode_index < 0 or mode_index > 2:
             print(f"Warning: Invalid mode_index {mode_index}, defaulting to 0")
             mode_index = 0
         
-        # Initialize travel_times dictionary if it doesn't exist
         if 'travel_times' not in self.graph[poi_i][poi_j]:
-            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]  # One slot for each transport mode
+            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
         
-        # Check if travel time is already calculated
         if self.graph[poi_i][poi_j]['travel_times'][mode_index] is None:
-            # Calculate travel time using the distance calculator
             origin = self.graph.nodes[poi_i]
             destination = self.graph.nodes[poi_j]
             travel_time = self.distance_calculator.get_travel_time(origin, destination, mode_index)
-            
-            # Store the travel time
             self.graph[poi_i][poi_j]['travel_times'][mode_index] = travel_time
         
         return self.graph[poi_i][poi_j]['travel_times'][mode_index]
@@ -556,9 +552,9 @@ def main():
             start_time="09:00", 
             end_time="20:00",
             mandatory_visits=[1],  # First attraction is mandatory (should be iconic landmark)
-            max_visits_by_type={"Restaurant": 2, "Touristique": 10},
+            max_visits_by_type={"Restaurant": 2, "Touristique": 5},
             api_key=api_key,
-            max_neighbors=5  # Only consider the 5 nearest POIs for API requests
+            max_neighbors=5
         )
         
         # Solve the problem
