@@ -15,7 +15,8 @@ class TouristItinerarySolver:
     """Solver for the Tourist Trip Design Problem using constraint programming."""
     
     def __init__(self, city="paris", graph=None, start_time="09:00", end_time="19:00", 
-                 mandatory_visits=None, max_visits_by_type=None, api_key=None, max_neighbors=5):
+                 mandatory_visits=None, max_visits_by_type=None, api_key=None, max_neighbors=3,
+                 mandatory_restaurant=False):
         """Initialize the solver with tour parameters."""
         self.city = city.lower()
         
@@ -45,6 +46,7 @@ class TouristItinerarySolver:
         
         # Setting visit constraints
         self.mandatory_visits = mandatory_visits or []
+        self.mandatory_restaurant = mandatory_restaurant
         # Ensure mandatory_visits are integers
         if self.mandatory_visits:
             new_mandatory = []
@@ -218,7 +220,21 @@ class TouristItinerarySolver:
         if 'travel_times' not in self.graph[poi_i][poi_j]:
             self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
         
-        if self.graph[poi_i][poi_j]['travel_times'][mode_index] is None:
+        # For walking (mode_index 0), calculate time based on haversine distance
+        if mode_index == 0 and self.graph[poi_i][poi_j]['travel_times'][mode_index] is None:
+            # Calculate walking time based on distance (average walking speed ~5 km/h)
+            distance_km = self._calculate_haversine_distance(
+                self.graph.nodes[poi_i]['latitude'], 
+                self.graph.nodes[poi_j]['longitude'],
+                self.graph.nodes[poi_j]['latitude'], 
+                self.graph.nodes[poi_j]['longitude']
+            )
+            # Apply a 1.3x penalty factor to account for non-straight paths
+            # 5 km/h = 12 minutes per km, multiply by penalty factor
+            walking_time = int(distance_km * 12 * 1.3)
+            self.graph[poi_i][poi_j]['travel_times'][mode_index] = walking_time
+        # For other transport modes, use the API
+        elif self.graph[poi_i][poi_j]['travel_times'][mode_index] is None:
             origin = self.graph.nodes[poi_i]
             destination = self.graph.nodes[poi_j]
             travel_time = self.distance_calculator.get_travel_time(origin, destination, mode_index)
@@ -238,13 +254,7 @@ class TouristItinerarySolver:
         
         travel_times = self.graph[poi_i][poi_j]['travel_times']
         
-        # Calculate travel times for each mode if they don't exist
-        for mode_idx in range(3):
-            if travel_times[mode_idx] is None:
-                origin = self.graph.nodes[poi_i]
-                destination = self.graph.nodes[poi_j]
-                travel_times[mode_idx] = self.distance_calculator.get_travel_time(origin, destination, mode_idx)
-        
+        # Calculate haversine distance first
         distance_km = self._calculate_haversine_distance(
             self.graph.nodes[poi_i]['latitude'], 
             self.graph.nodes[poi_i]['longitude'],
@@ -252,30 +262,61 @@ class TouristItinerarySolver:
             self.graph.nodes[poi_j]['longitude']
         )
         
+        # For walking, always calculate time based on distance instead of using API
+        if travel_times[0] is None:
+            # Calculate walking time: 5 km/h = 12 minutes per km, with 1.3x penalty factor
+            walking_time = int(distance_km * 12 * 1.3)
+            travel_times[0] = walking_time
+        
+        # Fast decision for very short distances - choose walking without API calls
+        if distance_km <= self.walking_threshold:
+            walk_time = travel_times[0]
+            if walk_time <= 25:  # 25 minutes is reasonable walking time
+                # Store the selected transport mode
+                self.graph[poi_i][poi_j]['selected_mode'] = 0
+                mode_names = ["walking", "public transport", "car"]
+                #print(f"Selected {mode_names[0]} for travel from {self.graph.nodes[poi_i]['Nom']} to {self.graph.nodes[poi_j]['Nom']}")
+                return 0, walk_time
+        
+        # For other transport modes, calculate only if needed
+        for mode_idx in range(1, 3):  # Skip walking (mode_idx 0)
+            if travel_times[mode_idx] is None:
+                origin = self.graph.nodes[poi_i]
+                destination = self.graph.nodes[poi_j]
+                travel_times[mode_idx] = self.distance_calculator.get_travel_time(origin, destination, mode_idx)
+        
+        # Create a copy of travel times with car penalty for decision making
+        decision_travel_times = travel_times.copy()
+        # Apply 3x penalty to car travel time in the decision calculation
+        if decision_travel_times[2] is not None:
+            decision_travel_times[2] = decision_travel_times[2] * 3
+        
         # Get chosen transport mode and travel time
         chosen_mode = 1  # Default to public transport
         chosen_time = travel_times[1]
         
-        # Priority 1: Walking for short distances (if reasonable time)
-        if distance_km <= self.walking_threshold:
-            walk_time = travel_times[0]
-            if walk_time <= 25:  # 25 minutes is reasonable walking time
-                chosen_mode = 0
-                chosen_time = walk_time
-        
         # Priority 2: Public transport for medium distances
-        elif distance_km <= self.public_transport_threshold:
-            chosen_mode = 1
-            chosen_time = travel_times[1]
+        if distance_km <= self.public_transport_threshold:
+            # Compare public transport with penalized car time
+            if decision_travel_times[1] <= decision_travel_times[2]:
+                chosen_mode = 1
+                chosen_time = travel_times[1]
+            else:
+                chosen_mode = 2
+                chosen_time = travel_times[2]
         
-        # Priority 3: Car for longer distances
+        # Priority 3: Car for longer distances, but only if significantly better than public transport
         else:
-            chosen_mode = 2
-            chosen_time = travel_times[2]
+            if decision_travel_times[2] < decision_travel_times[1]:
+                chosen_mode = 2
+                chosen_time = travel_times[2]
+            else:
+                chosen_mode = 1
+                chosen_time = travel_times[1]
         
         # Log the chosen transport mode
         mode_names = ["walking", "public transport", "car"]
-        print(f"Selected {mode_names[chosen_mode]} for travel from {self.graph.nodes[poi_i]['Nom']} to {self.graph.nodes[poi_j]['Nom']}")
+        #print(f"Selected {mode_names[chosen_mode]} for travel from {self.graph.nodes[poi_i]['Nom']} to {self.graph.nodes[poi_j]['Nom']}")
         
         # Store the selected transport mode
         self.graph[poi_i][poi_j]['selected_mode'] = chosen_mode
@@ -419,6 +460,35 @@ class TouristItinerarySolver:
             if poi_id in pois:
                 model.Add(visit[poi_id] == 1)
         
+        # Constraint for mandatory restaurant
+        if self.mandatory_restaurant:
+            restaurant_pois = [i for i in pois if self.graph.nodes[i].get('Type') == "Restaurant"]
+            if restaurant_pois:
+                model.Add(sum(visit[i] for i in restaurant_pois) >= 1)
+                
+                # Enforce meal time constraints for restaurants
+                lunch_start = self._time_to_minutes("11:00") - self.start_time
+                lunch_end = self._time_to_minutes("13:00") - self.start_time
+                dinner_start = self._time_to_minutes("19:00") - self.start_time
+                dinner_end = self._time_to_minutes("21:00") - self.start_time
+                
+                for i in restaurant_pois:
+                    # Variable indicating if restaurant i is visited during lunch
+                    lunch_visit = model.NewBoolVar(f'lunch_visit_{i}')
+                    
+                    # Variable indicating if restaurant i is visited during dinner
+                    dinner_visit = model.NewBoolVar(f'dinner_visit_{i}')
+                    
+                    # Link the time constraints to these variables
+                    model.Add(arrival_time[i] >= lunch_start).OnlyEnforceIf(lunch_visit)
+                    model.Add(arrival_time[i] <= lunch_end - self.graph.nodes[i]['duree']).OnlyEnforceIf(lunch_visit)
+                    
+                    model.Add(arrival_time[i] >= dinner_start).OnlyEnforceIf(dinner_visit)
+                    model.Add(arrival_time[i] <= dinner_end - self.graph.nodes[i]['duree']).OnlyEnforceIf(dinner_visit)
+                    
+                    # Restaurant visits must be during lunch or dinner
+                    model.Add(lunch_visit + dinner_visit == visit[i])
+        
         # Constraint 8: Category limits
         for poi_type, max_count in self.max_visits_by_type.items():
             type_pois = [i for i in pois if self.graph.nodes[i].get('Type') == poi_type]
@@ -523,53 +593,3 @@ class TouristItinerarySolver:
         hours = minutes // 60
         mins = minutes % 60
         return f"{hours:02d}:{mins:02d}"
-
-
-def main():
-    """Main function to demonstrate the solver."""
-    # Load environment variables from .env file
-    load_dotenv()
-    
-    # Get API key from environment variables
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("Warning: No OpenAI API key found in .env file. Please add OPENAI_API_KEY to your .env file.")
-        return
-    
-    # Get city name from command line argument or use default
-    import argparse
-    parser = argparse.ArgumentParser(description='Tourist Itinerary Planner')
-    parser.add_argument('--city', type=str, default='paris', help='City to plan itinerary for')
-    args = parser.parse_args()
-    
-    city = args.city.lower()
-    print(f"Planning itinerary for {city.title()}...")
-    
-    # Create a solver with default parameters
-    try:
-        solver = TouristItinerarySolver(
-            city=city,
-            start_time="09:00", 
-            end_time="20:00",
-            mandatory_visits=[1],  # First attraction is mandatory (should be iconic landmark)
-            max_visits_by_type={"Restaurant": 2, "Touristique": 5},
-            api_key=api_key,
-            max_neighbors=5
-        )
-        
-        # Solve the problem
-        print("Solving the tourist itinerary planning problem...")
-        itinerary = solver.solve(max_pois=8)
-        
-        # Print the solution
-        print(solver.format_itinerary(itinerary))
-        
-        # Print API request statistics
-        print(f"\nAPI Request Statistics:")
-        print(f"Total API requests made: {solver.distance_calculator.request_count}")
-        
-    except Exception as e:
-        print(f"Error planning itinerary: {e}")
-
-if __name__ == "__main__":
-    main()

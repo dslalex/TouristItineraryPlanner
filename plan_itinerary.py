@@ -24,9 +24,9 @@ def main():
     city = sys.argv[1]
     
     # Get optional parameters
-    start_time = sys.argv[2] if len(sys.argv) > 2 else "09:00"
-    end_time = sys.argv[3] if len(sys.argv) > 3 else "20:00"
-    max_pois = int(sys.argv[4]) if len(sys.argv) > 4 else 8
+    start_time = sys.argv[2] if len(sys.argv) > 2 else "08:00"
+    end_time = sys.argv[3] if len(sys.argv) > 3 else "22:00"
+    max_pois = int(sys.argv[4]) if len(sys.argv) > 4 else 6
     
     print(f"Planning itinerary for {city}...")
     print(f"Time window: {start_time} to {end_time}")
@@ -39,9 +39,10 @@ def main():
             start_time=start_time, 
             end_time=end_time,
             mandatory_visits=[1],  # First attraction is mandatory
-            max_visits_by_type={"Restaurant": 2, "Touristique": 10},
+            max_visits_by_type={"Restaurant": 2, "Touristique": 3},
             api_key=api_key,
-            max_neighbors=5
+            max_neighbors=3,
+            mandatory_restaurant=True
         )
         
         # Solve the problem

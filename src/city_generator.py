@@ -12,14 +12,14 @@ def generate_city_data(city_name, api_key=None):
     
     # System message to guide the AI
     system_message = """You are a travel expert with detailed knowledge of tourist attractions worldwide.
-    Generate realistic and accurate tourist attractions for the specified city.
-    Each attraction should include ID, name, opening hours, type, interest score (1-10), 
+    Generate realistic and accurate tourist attractions and restaurants for the specified city.
+    Each attraction and restaurants should include ID, name, opening hours, type, interest score (1-10), 
     visit duration in minutes, cost in euros, and accurate latitude/longitude coordinates.
     Include a mix of tourist attractions, museums, parks, landmarks, and restaurants.
     Return only valid JSON without any additional text."""
     
     # Prompt for the attractions
-    user_message = f"""Generate 30 popular tourist attractions in {city_name}.
+    user_message = f"""Generate exactly 80 popular tourist attractions and exactly 20 restaurants in {city_name}.
     
     Follow this exact format for each attraction:
     {{
@@ -53,25 +53,36 @@ def generate_city_data(city_name, api_key=None):
         # Extract and parse the JSON
         content = response.choices[0].message.content
         data = json.loads(content)
-        
-        # Check if the response has the expected format (a list of attractions)
-        attractions = None
-        if "attractions" in data:
-            attractions = data["attractions"]
-        elif "locations" in data:
-            attractions = data["locations"]
+
+        # Initialize empty array for all POIs
+        all_pois = []
+
+        # Look for attractions and restaurants in the response
+        if isinstance(data, list):
+            # If data is already a list, use it directly
+            all_pois = data
         else:
-            # Try to find any array in the response
-            for key, value in data.items():
-                if isinstance(value, list) and len(value) > 0:
-                    attractions = value
-                    break
+            # If data is a dictionary, check different possible structures
+            if "attractions" in data and "restaurants" in data:
+                # If API returned separate arrays for attractions and restaurants
+                all_pois = data["attractions"] + data["restaurants"]
+            elif "attractions" in data:
+                all_pois = data["attractions"]
+            elif "locations" in data:
+                all_pois = data["locations"]
+            elif "poi" in data:
+                all_pois = data["poi"]
             else:
-                # If no array found, assume the entire object is an array
-                if isinstance(data, list):
-                    attractions = data
-                else:
-                    attractions = list(data.values())[0] if data else []
+                # Try to find and combine any arrays in the response
+                for key, value in data.items():
+                    if isinstance(value, list) and len(value) > 0:
+                        all_pois.extend(value)
+                
+                # If still empty, try a last resort
+                if not all_pois and data:
+                    all_pois = list(data.values())[0] if isinstance(list(data.values())[0], list) else []
+
+        attractions = all_pois
         
         # Sanitize the attractions data to ensure correct types
         if attractions:

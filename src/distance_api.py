@@ -38,7 +38,7 @@ class DistanceCalculator:
         )
         
         try:
-            print(f"API Request: {origin['Nom']} to {destination['Nom']} by {mode_str}")
+            #print(f"API Request: {origin['Nom']} to {destination['Nom']} by {mode_str}")
             self.request_count += 1
             
             response = openai.chat.completions.create(
@@ -52,7 +52,7 @@ class DistanceCalculator:
             
             # Extract the travel time from the response
             travel_time = self._parse_time_from_response(response.choices[0].message.content)
-            print(f"Response: {travel_time} minutes")
+            #print(f"Response: {travel_time} minutes")
             
             # Cache the result
             self.cache[cache_key] = travel_time
