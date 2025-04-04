@@ -3,6 +3,64 @@ import json
 import os
 from data.city_graph import create_graph, save_graph
 
+def generate_city_fun_facts(city_name, api_key=None, count=8):
+    """Generate fun facts about a specified city using LLM."""
+    if api_key:
+        openai.api_key = api_key
+    
+    print(f"Generating fun facts for {city_name}...")
+    
+    # System message to guide the AI
+    system_message = """You are a knowledgeable travel expert.
+    Generate interesting, concise, and accurate fun facts about the specified city.
+    Each fact should be educational, entertaining, and suitable for tourists.
+    Return only valid JSON without any additional text."""
+    
+    # Prompt for the fun facts
+    user_message = f"""Generate exactly {count} interesting fun facts about {city_name}.
+    
+    Return the data as a JSON array of strings, with each string being a complete fun fact.
+    Make each fact between 100-150 characters long.
+    Include historical, cultural, architectural, and unique aspects of the city.
+    Avoid generic facts that could apply to any city.
+    """
+    
+    try:
+        # Make the API call with a smaller model
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",  # Using the smaller model as requested
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7
+        )
+        
+        # Extract and parse the JSON
+        content = response.choices[0].message.content
+        data = json.loads(content)
+        
+        # Return the fun facts
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict) and "facts" in data:
+            return data["facts"]
+        elif isinstance(data, dict) and "fun_facts" in data:
+            return data["fun_facts"]
+        else:
+            # Try to find an array in the response
+            for key, value in data.items():
+                if isinstance(value, list) and len(value) > 0:
+                    return value
+            
+            # If no arrays found, return empty list
+            return []
+            
+    except Exception as e:
+        print(f"Error generating fun facts: {e}")
+        return []
+
 def generate_city_data(city_name, api_key=None):
     """Generate tourist attraction data for a specified city using LLM."""
     if api_key:
