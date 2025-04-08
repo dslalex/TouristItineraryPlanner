@@ -57,7 +57,8 @@ document.addEventListener('DOMContentLoaded', function() {
             city: city,
             start_time: document.getElementById('start-time').value,
             end_time: document.getElementById('end-time').value,
-            max_pois: document.getElementById('max-pois').value
+            max_pois: document.getElementById('max-pois').value,
+            restaurant_count: document.getElementById('restaurant-count').value
         };
         
         // Send API request

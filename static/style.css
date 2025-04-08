@@ -56,6 +56,13 @@ label {
     font-weight: 600;
 }
 
+.input-description {
+    color: #777;
+    font-size: 0.85em;
+    margin-top: 4px;
+    margin-bottom: 0;
+}
+
 input, select {
     width: 100%;
     padding: 10px;

@@ -7,19 +7,18 @@ from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
-def plan_itinerary(city, start_time="08:00", end_time="22:00", max_pois=6, api_key=None):
+def plan_itinerary(city, start_time="08:00", end_time="22:00", max_pois=6, restaurant_count=1, api_key=None):
     """Plan a tourist itinerary and return the results"""
     try:
-        # Create and run the solver
         solver = TouristItinerarySolver(
             city=city,
             start_time=start_time, 
             end_time=end_time,
-            mandatory_visits=[1],  # First attraction is mandatory
-            max_visits_by_type={"Restaurant": 2, "Touristique": 3},
+            mandatory_visits=[1],
             api_key=api_key,
             max_neighbors=3,
-            mandatory_restaurant=True
+            mandatory_restaurant=True if restaurant_count > 0 else False,
+            restaurant_count=restaurant_count
         )
         
         # Solve the problem
@@ -70,9 +69,10 @@ def api_plan():
     start_time = data.get('start_time', '08:00')
     end_time = data.get('end_time', '22:00')
     max_pois = int(data.get('max_pois', 6))
+    restaurant_count = int(data.get('restaurant_count', 1))
     
     # Plan the itinerary
-    result = plan_itinerary(city, start_time, end_time, max_pois, api_key)
+    result = plan_itinerary(city, start_time, end_time, max_pois, restaurant_count, api_key)
     
     return jsonify(result)
 
@@ -129,9 +129,9 @@ def main():
     
     # Parse command line arguments
     if len(sys.argv) < 2:
-        print("Usage: python plan_itinerary.py <city_name> [start_time] [end_time] [max_pois]")
+        print("Usage: python plan_itinerary.py <city_name> [start_time] [end_time] [max_pois] [restaurant_count]")
         print("       python plan_itinerary.py --server [port]")
-        print("Example: python plan_itinerary.py 'Paris' '09:00' '18:00' 8")
+        print("Example: python plan_itinerary.py 'Paris' '09:00' '18:00' 8 2")
         sys.exit(1)
     
     # Get city name
@@ -140,14 +140,16 @@ def main():
     # Get optional parameters
     start_time = sys.argv[2] if len(sys.argv) > 2 else "08:00"
     end_time = sys.argv[3] if len(sys.argv) > 3 else "22:00"
-    max_pois = int(sys.argv[4]) if len(sys.argv) > 4 else 6
+    max_pois = int(sys.argv[4]) if len(sys.argv) > 4 else 8
+    restaurant_count = int(sys.argv[5]) if len(sys.argv) > 5 else 2
     
     print(f"Planning itinerary for {city}...")
     print(f"Time window: {start_time} to {end_time}")
     print(f"Maximum POIs: {max_pois}")
+    print(f"Restaurant count: {restaurant_count}")
     
     # Plan the itinerary
-    result = plan_itinerary(city, start_time, end_time, max_pois, api_key)
+    result = plan_itinerary(city, start_time, end_time, max_pois, restaurant_count, api_key)
     
     if result["success"]:
         print(result["itinerary"])

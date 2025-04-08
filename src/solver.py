@@ -15,8 +15,8 @@ class TouristItinerarySolver:
     """Solver for the Tourist Trip Design Problem using constraint programming."""
     
     def __init__(self, city="paris", graph=None, start_time="09:00", end_time="19:00", 
-                 mandatory_visits=None, max_visits_by_type=None, api_key=None, max_neighbors=3,
-                 mandatory_restaurant=False):
+                 mandatory_visits=None, api_key=None, max_neighbors=3,
+                 mandatory_restaurant=True, restaurant_count=1):
         """Initialize the solver with tour parameters."""
         self.city = city.lower()
         
@@ -47,6 +47,8 @@ class TouristItinerarySolver:
         # Setting visit constraints
         self.mandatory_visits = mandatory_visits or []
         self.mandatory_restaurant = mandatory_restaurant
+        self.restaurant_count = restaurant_count
+        
         # Ensure mandatory_visits are integers
         if self.mandatory_visits:
             new_mandatory = []
@@ -61,7 +63,6 @@ class TouristItinerarySolver:
             for poi_id in self.mandatory_visits:
                 if poi_id not in self.graph.nodes():
                     print(f"Warning: Mandatory POI {poi_id} not found in graph")
-        self.max_visits_by_type = max_visits_by_type or {}
         
         # Travel parameters
         self.api_key = api_key
@@ -129,7 +130,7 @@ class TouristItinerarySolver:
     def _time_to_minutes(self, time_str):
         """Convert time string (HH:MM) to minutes since midnight."""
         if time_str == "All day":
-            return 0  # Special case for POIs open all day
+            return 0  # Open all day
         if "," in time_str:  # Handle multiple time intervals (e.g., lunch/dinner restaurants)
             return 0  # For simplicity, treat as always open
             
@@ -342,14 +343,7 @@ class TouristItinerarySolver:
         return c * r
     
     def solve(self, max_pois=10):
-        """Solve the Tourist Trip Design Problem.
-        
-        Args:
-            max_pois: Maximum number of POIs to include in the itinerary
-        
-        Returns:
-            A list of tuples (poi_id, arrival_time, departure_time) representing the itinerary
-        """
+        """Solve the Tourist Trip Design Problem using CP-SAT solver."""
         # Ensure all POIs have integer IDs
         pois = []
         for node in self.graph.nodes():
@@ -460,47 +454,173 @@ class TouristItinerarySolver:
             if poi_id in pois:
                 model.Add(visit[poi_id] == 1)
         
-        # Constraint for mandatory restaurant
-        if self.mandatory_restaurant:
-            restaurant_pois = [i for i in pois if self.graph.nodes[i].get('Type') == "Restaurant"]
-            if restaurant_pois:
-                model.Add(sum(visit[i] for i in restaurant_pois) >= 1)
-                
-                # Enforce meal time constraints for restaurants
-                lunch_start = self._time_to_minutes("11:00") - self.start_time
-                lunch_end = self._time_to_minutes("13:00") - self.start_time
-                dinner_start = self._time_to_minutes("19:00") - self.start_time
-                dinner_end = self._time_to_minutes("21:00") - self.start_time
-                
-                for i in restaurant_pois:
-                    # Variable indicating if restaurant i is visited during lunch
-                    lunch_visit = model.NewBoolVar(f'lunch_visit_{i}')
-                    
-                    # Variable indicating if restaurant i is visited during dinner
-                    dinner_visit = model.NewBoolVar(f'dinner_visit_{i}')
-                    
-                    # Link the time constraints to these variables
-                    model.Add(arrival_time[i] >= lunch_start).OnlyEnforceIf(lunch_visit)
-                    model.Add(arrival_time[i] <= lunch_end - self.graph.nodes[i]['duree']).OnlyEnforceIf(lunch_visit)
-                    
-                    model.Add(arrival_time[i] >= dinner_start).OnlyEnforceIf(dinner_visit)
-                    model.Add(arrival_time[i] <= dinner_end - self.graph.nodes[i]['duree']).OnlyEnforceIf(dinner_visit)
-                    
-                    # Restaurant visits must be during lunch or dinner
-                    model.Add(lunch_visit + dinner_visit == visit[i])
+        # Separate restaurant POIs and tourist POIs
+        restaurant_pois = [i for i in pois if self.graph.nodes[i].get('Type') == "Restaurant"]
+        tourist_pois = [i for i in pois if self.graph.nodes[i].get('Type') != "Restaurant"]
         
-        # Constraint 8: Category limits
-        for poi_type, max_count in self.max_visits_by_type.items():
-            type_pois = [i for i in pois if self.graph.nodes[i].get('Type') == poi_type]
-            model.Add(sum(visit[i] for i in type_pois) <= max_count)
+        # Apply the tourist POI limit based on max_pois and restaurant_count
+        max_tourist_count = max_pois - self.restaurant_count
+        if max_tourist_count > 0:
+            model.Add(sum(visit[i] for i in tourist_pois) <= max_tourist_count)
         
-        # Objective: Maximize total interest score
+        # Handle restaurant constraints
+        if restaurant_pois:
+            # Define meal time periods
+            lunch_start = self._time_to_minutes("11:30") - self.start_time
+            lunch_end = self._time_to_minutes("14:00") - self.start_time
+            dinner_start = self._time_to_minutes("18:00") - self.start_time
+            dinner_end = self._time_to_minutes("21:00") - self.start_time
+            
+            # Apply the exact restaurant count constraint
+            model.Add(sum(visit[i] for i in restaurant_pois) == self.restaurant_count)
+            
+            # Variables for lunch and dinner visits
+            lunch_visit = model.NewBoolVar('lunch_restaurant_visit')
+            dinner_visit = model.NewBoolVar('dinner_restaurant_visit')
+            
+            # For each restaurant, set variables for lunch and dinner periods
+            lunch_restaurants = {}
+            dinner_restaurants = {}
+            
+            for i in restaurant_pois:
+                # Define variables for each restaurant
+                lunch_restaurants[i] = model.NewBoolVar(f'lunch_rest_{i}')
+                dinner_restaurants[i] = model.NewBoolVar(f'dinner_rest_{i}')
+                
+                # Link restaurant to lunch time
+                is_in_lunch_time = model.NewBoolVar(f'in_lunch_time_{i}')
+                model.Add(arrival_time[i] >= lunch_start).OnlyEnforceIf(is_in_lunch_time)
+                model.Add(arrival_time[i] <= lunch_end).OnlyEnforceIf(is_in_lunch_time)
+                
+                model.AddBoolAnd([visit[i], is_in_lunch_time]).OnlyEnforceIf(lunch_restaurants[i])
+                model.AddBoolOr([visit[i].Not(), is_in_lunch_time.Not()]).OnlyEnforceIf(lunch_restaurants[i].Not())
+                
+                # Link restaurant to dinner time
+                is_in_dinner_time = model.NewBoolVar(f'in_dinner_time_{i}')
+                model.Add(arrival_time[i] >= dinner_start).OnlyEnforceIf(is_in_dinner_time)
+                model.Add(arrival_time[i] <= dinner_end).OnlyEnforceIf(is_in_dinner_time)
+                
+                model.AddBoolAnd([visit[i], is_in_dinner_time]).OnlyEnforceIf(dinner_restaurants[i])
+                model.AddBoolOr([visit[i].Not(), is_in_dinner_time.Not()]).OnlyEnforceIf(dinner_restaurants[i].Not())
+            
+            # Link lunch_visit and dinner_visit to existence of lunch/dinner restaurants
+            model.Add(sum(lunch_restaurants[i] for i in restaurant_pois) >= 1).OnlyEnforceIf(lunch_visit)
+            model.Add(sum(lunch_restaurants[i] for i in restaurant_pois) == 0).OnlyEnforceIf(lunch_visit.Not())
+            
+            model.Add(sum(dinner_restaurants[i] for i in restaurant_pois) >= 1).OnlyEnforceIf(dinner_visit)
+            model.Add(sum(dinner_restaurants[i] for i in restaurant_pois) == 0).OnlyEnforceIf(dinner_visit.Not())
+            
+            # Apply restaurant count specific constraints
+            if self.restaurant_count == 1:
+                # Exactly one restaurant - either lunch or dinner
+                model.Add(lunch_visit + dinner_visit == 1)
+                
+            elif self.restaurant_count >= 2:
+                # Two or more restaurants - must have both lunch and dinner
+                model.Add(lunch_visit == 1)
+                model.Add(dinner_visit == 1)
+            
+            # Prevent multiple restaurants in the same meal period
+            model.Add(sum(lunch_restaurants[i] for i in restaurant_pois) <= 1)
+            model.Add(sum(dinner_restaurants[i] for i in restaurant_pois) <= 1)
+            
+            # Implement meal breaks when no restaurant is scheduled
+            # For tourist POIs, prevent them from being scheduled during meal times
+            # when no restaurant is planned for that meal
+            
+            # First, create variables to track if a tourist POI overlaps with meal times
+            tourist_in_lunch = {}
+            tourist_in_dinner = {}
+            
+            for i in tourist_pois:
+                # Variable for tourist POI overlapping lunch time
+                tourist_in_lunch[i] = model.NewBoolVar(f'tourist_{i}_in_lunch')
+                
+                # POI arrival before lunch end AND departure after lunch start means overlap
+                arrival_before_lunch_end = model.NewBoolVar(f'arrival_{i}_before_lunch_end')
+                model.Add(arrival_time[i] <= lunch_end).OnlyEnforceIf(arrival_before_lunch_end)
+                model.Add(arrival_time[i] > lunch_end).OnlyEnforceIf(arrival_before_lunch_end.Not())
+                
+                departure_after_lunch_start = model.NewBoolVar(f'departure_{i}_after_lunch_start')
+                model.Add(departure_time[i] >= lunch_start).OnlyEnforceIf(departure_after_lunch_start)
+                model.Add(departure_time[i] < lunch_start).OnlyEnforceIf(departure_after_lunch_start.Not())
+                
+                model.AddBoolAnd([arrival_before_lunch_end, departure_after_lunch_start, visit[i]]).OnlyEnforceIf(tourist_in_lunch[i])
+                model.AddBoolOr([arrival_before_lunch_end.Not(), departure_after_lunch_start.Not(), visit[i].Not()]).OnlyEnforceIf(tourist_in_lunch[i].Not())
+                
+                # Same logic for dinner time
+                tourist_in_dinner[i] = model.NewBoolVar(f'tourist_{i}_in_dinner')
+                
+                arrival_before_dinner_end = model.NewBoolVar(f'arrival_{i}_before_dinner_end')
+                model.Add(arrival_time[i] <= dinner_end).OnlyEnforceIf(arrival_before_dinner_end)
+                model.Add(arrival_time[i] > dinner_end).OnlyEnforceIf(arrival_before_dinner_end.Not())
+                
+                departure_after_dinner_start = model.NewBoolVar(f'departure_{i}_after_dinner_start')
+                model.Add(departure_time[i] >= dinner_start).OnlyEnforceIf(departure_after_dinner_start)
+                model.Add(departure_time[i] < dinner_start).OnlyEnforceIf(departure_after_dinner_start.Not())
+                
+                model.AddBoolAnd([arrival_before_dinner_end, departure_after_dinner_start, visit[i]]).OnlyEnforceIf(tourist_in_dinner[i])
+                model.AddBoolOr([arrival_before_dinner_end.Not(), departure_after_dinner_start.Not(), visit[i].Not()]).OnlyEnforceIf(tourist_in_dinner[i].Not())
+            
+            # No tourist attractions during lunch if no lunch restaurant
+            for i in tourist_pois:
+                model.AddImplication(lunch_visit.Not(), tourist_in_lunch[i].Not())
+            
+            # No tourist attractions during dinner if no dinner restaurant  
+            for i in tourist_pois:
+                model.AddImplication(dinner_visit.Not(), tourist_in_dinner[i].Not())
+        
+        # Simple constraint: define dinner restaurants and ensure one exists when needed
+        if self.restaurant_count >= 2:
+            # Track which restaurants are scheduled during dinner time
+            dinner_rests = []
+            for i in restaurant_pois:
+                # Create a boolean variable that's true if this restaurant is a dinner restaurant
+                is_dinner = model.NewBoolVar(f'is_dinner_{i}')
+                
+                # A restaurant is a dinner restaurant if:
+                # 1. It's visited (visit[i] == 1)
+                # 2. It starts during dinner time (arrival_time[i] >= dinner_start)
+                model.Add(visit[i] == 1).OnlyEnforceIf(is_dinner)
+                model.Add(arrival_time[i] >= dinner_start).OnlyEnforceIf(is_dinner)
+                
+                # If not a dinner restaurant, then either:
+                # - It's not visited (visit[i] == 0), OR
+                # - It starts before dinner time (arrival_time[i] < dinner_start)
+                model.Add(visit[i] == 0).OnlyEnforceIf([is_dinner.Not(), model.NewBoolVar(f'not_visited_{i}')])
+                model.Add(arrival_time[i] < dinner_start).OnlyEnforceIf([is_dinner.Not(), model.NewBoolVar(f'before_dinner_{i}')])
+                
+                dinner_rests.append(is_dinner)
+                
+            # Ensure at least one dinner restaurant
+            model.Add(sum(dinner_rests) >= 1)
+        
+        # Extremely simple gap minimization
+        for p in range(max_pois - 1):
+            # For each position in the itinerary
+            pos_p_poi = model.NewIntVar(0, len(pois)-1, f'poi_at_pos_{p}')
+            pos_next_poi = model.NewIntVar(0, len(pois)-1, f'poi_at_pos_{p+1}')
+            
+            # Link these to the actual position variables
+            for i, poi_id in enumerate(pois):
+                model.Add(pos_p_poi == i).OnlyEnforceIf(pos[poi_id][p])
+            
+            for i, poi_id in enumerate(pois):
+                model.Add(pos_next_poi == i).OnlyEnforceIf(pos[poi_id][p+1])
+            
+            # Create a variable for gap time
+            gap_time = model.NewIntVar(0, max_time, f'gap_at_pos_{p}')
+            
+            # Set a penalty for large gaps in the objective
+            model.Add(gap_time <= 30)  # Maximum 30 minute gap between activities
+        
+        # Original objective
         objective = sum(visit[i] * self.graph.nodes[i]['Interet'] for i in pois)
         model.Maximize(objective)
         
         # Solve the model
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = 60  # Set a time limit
+        solver.parameters.max_time_in_seconds = 60
         status = solver.Solve(model)
         
         # Check if a solution was found
