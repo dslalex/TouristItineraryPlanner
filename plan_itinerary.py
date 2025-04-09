@@ -17,7 +17,7 @@ if not os.path.exists(log_dir):
 log_file = os.path.join(log_dir, f'app_{datetime.now().strftime("%Y%m%d")}.log')
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.CRITICAL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file),
@@ -232,14 +232,8 @@ def api_plan():
 
         # First, plan the itinerary (this will generate the graph if needed)
         logger.info("Planning initial itinerary")
-        result = plan_itinerary(
-            city, 
-            start_time, 
-            end_time, 
-            max_pois, 
-            restaurant_count, 
-            api_key
-        )
+        import src.city_generator as city_generator
+        city_generator.generate_city_data(city, api_key)
         
         # After graph is created, identify mandatory POIs if any were specified
         mandatory_poi_ids = []
@@ -261,6 +255,16 @@ def api_plan():
                     api_key, 
                     mandatory_poi_ids
                 )
+        else:
+            # If no mandatory POIs, just plan the itinerary
+            result = plan_itinerary(
+                city, 
+                start_time, 
+                end_time, 
+                max_pois, 
+                restaurant_count, 
+                api_key
+            )
         
         logger.info("Itinerary planning completed successfully")
         logger.debug(f"Result: {json.dumps(result)}")
