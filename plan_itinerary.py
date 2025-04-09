@@ -230,10 +230,9 @@ def api_plan():
         graph_exists = check_city_graph_exists(city.lower())
         logger.info(f"Graph exists for {city}: {graph_exists}")
 
-        # First, plan the itinerary (this will generate the graph if needed)
-        logger.info("Planning initial itinerary")
         import src.city_generator as city_generator
-        city_generator.generate_city_data(city, api_key)
+        if not graph_exists:
+            city_generator.generate_city_data(city, api_key)
         
         # After graph is created, identify mandatory POIs if any were specified
         mandatory_poi_ids = []
