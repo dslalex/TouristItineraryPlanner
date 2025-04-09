@@ -38,7 +38,10 @@ document.addEventListener('DOMContentLoaded', function() {
         clearInterval(factInterval);
         funFacts = [];
         currentFactIndex = 0;
-        document.getElementById('fun-fact').textContent = "Loading interesting facts about " + formattedCity + "...";
+        const funFactElement = document.getElementById('fun-fact');
+        if (funFactElement) {
+            funFactElement.textContent = "Loading interesting facts about " + formattedCity + "...";
+        }
         
         // STEP 1: First fetch fun facts
         try {
@@ -58,8 +61,15 @@ document.addEventListener('DOMContentLoaded', function() {
             start_time: document.getElementById('start-time').value,
             end_time: document.getElementById('end-time').value,
             max_pois: document.getElementById('max-pois').value,
-            restaurant_count: document.getElementById('restaurant-count').value
+            restaurant_count: document.getElementById('restaurant-count').value,
+            mandatory_pois: document.getElementById('mandatory-pois').value
         };
+        
+        // Set itinerary result to not display while loading
+        const itineraryResult = document.getElementById('itinerary-result');
+        if (itineraryResult) {
+            itineraryResult.style.display = 'none';
+        }
         
         // Send API request
         fetch('/api/plan', {
@@ -79,8 +89,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (data.success) {
                 // Show results
-                itineraryResult.textContent = data.itinerary;
-                itineraryResult.style.display = 'block';
+                displayItinerary(data.itinerary);
             } else {
                 // Show error
                 handleError(data.error);
@@ -102,6 +111,9 @@ document.addEventListener('DOMContentLoaded', function() {
         errorMessage.textContent = `Error: ${message}`;
         errorMessage.style.display = 'block';
     }
+
+    console.log('DOM fully loaded, initializing event listeners');
+    initializePOIDetailsModal();
 });
 
 // Fetch fun facts and return a promise
@@ -146,21 +158,162 @@ function displayNextFact() {
     if (funFacts.length > 0) {
         const funFactElement = document.getElementById('fun-fact');
         
-        // Add fade-out effect
-        funFactElement.classList.remove('fade-in');
-        funFactElement.classList.add('fade-out');
-        
-        // Wait for fade-out to complete
-        setTimeout(() => {
-            // Update text
-            funFactElement.textContent = funFacts[currentFactIndex];
+        // Check if element exists before manipulating it
+        if (funFactElement) {
+            // Add fade-out effect
+            funFactElement.classList.remove('fade-in');
+            funFactElement.classList.add('fade-out');
             
-            // Switch to fade-in
-            funFactElement.classList.remove('fade-out');
-            funFactElement.classList.add('fade-in');
+            // Wait for fade-out to complete
+            setTimeout(() => {
+                // Update text
+                funFactElement.textContent = funFacts[currentFactIndex];
+                
+                // Switch to fade-in
+                funFactElement.classList.remove('fade-out');
+                funFactElement.classList.add('fade-in');
+                
+                // Update index for next time
+                currentFactIndex = (currentFactIndex + 1) % funFacts.length;
+            }, 500);
+        }
+    }
+}
+
+function displayItinerary(result) {
+    const planningIndicator = document.getElementById('planning-indicator');
+    if (planningIndicator) {
+        planningIndicator.style.display = 'none';
+    }
+    
+    const itineraryResult = document.getElementById('itinerary-result');
+    if (itineraryResult) {
+        itineraryResult.style.display = 'block';
+        itineraryResult.textContent = result;
+    }
+}
+
+function loadFunFacts(poiId) {
+    console.log('Loading fun facts for POI ID:', poiId);
+    
+    // Safely get elements with null checks
+    const funFactsLoading = document.getElementById('fun-facts-loading');
+    const funFactsContent = document.getElementById('fun-facts-content');
+    const funFactsError = document.getElementById('fun-facts-error');
+    
+    // Show loading state if element exists
+    if (funFactsLoading) {
+        funFactsLoading.style.display = 'block';
+        console.log('Showing loading indicator');
+    }
+    
+    // Hide other elements if they exist
+    if (funFactsContent) funFactsContent.style.display = 'none';
+    if (funFactsError) funFactsError.style.display = 'none';
+    
+    // Make the API call
+    fetch(`/api/fun-facts/${poiId}`)
+        .then(response => response.json())
+        .then(data => {
+            console.log('Fun facts API response:', data);
             
-            // Update index for next time
-            currentFactIndex = (currentFactIndex + 1) % funFacts.length;
-        }, 500);
+            // Hide loading indicator
+            if (funFactsLoading) funFactsLoading.style.display = 'none';
+            
+            if (data.facts) {
+                // Show content if element exists
+                if (funFactsContent) {
+                    funFactsContent.style.display = 'block';
+                    funFactsContent.innerHTML = data.facts;
+                    console.log('Fun facts displayed successfully');
+                } else {
+                    console.error('Fun facts content element not found');
+                }
+            } else {
+                throw new Error(data.error || 'No facts returned');
+            }
+        })
+        .catch(error => {
+            console.error('Error loading fun facts alex:', error);
+            
+            // Hide loading indicator
+            if (funFactsLoading) funFactsLoading.style.display = 'none';
+            
+            // Show error if element exists
+            if (funFactsError) {
+                funFactsError.style.display = 'block';
+                funFactsError.textContent = 'Failed to load fun facts. Please try again.';
+            }
+        });
+}
+
+function showFunFacts(poiId, facts) {
+    const funFactsLoading = document.getElementById('fun-facts-loading');
+    const funFactsContent = document.getElementById('fun-facts-content');
+    
+    if (funFactsLoading) funFactsLoading.style.display = 'none';
+    if (funFactsContent) {
+        funFactsContent.style.display = 'block';
+        funFactsContent.innerHTML = facts;
+    }
+}
+
+function showFunFactsError(error) {
+    const funFactsLoading = document.getElementById('fun-facts-loading');
+    const funFactsError = document.getElementById('fun-facts-error');
+    
+    if (funFactsLoading) funFactsLoading.style.display = 'none';
+    if (funFactsError) {
+        funFactsError.style.display = 'block';
+        funFactsError.textContent = error;
+    }
+}
+
+// Initialize the modal and its event handlers
+function initializePOIDetailsModal() {
+    // Get modal elements
+    const modal = document.getElementById('poi-details-modal');
+    const closeBtn = modal?.querySelector('.close');
+    
+    // Set up event handlers if elements exist
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            if (modal) modal.style.display = 'none';
+        });
+    }
+    
+    // Close when clicking outside
+    window.addEventListener('click', function(event) {
+        if (event.target === modal) {
+            modal.style.display = 'none';
+        }
+    });
+    
+    console.log('POI details modal initialized');
+}
+
+// Show POI details and load fun facts
+function showPOIDetails(poi) {
+    console.log('Showing POI details for:', poi);
+    
+    // Safely get elements
+    const modal = document.getElementById('poi-details-modal');
+    const poiName = document.getElementById('poi-name');
+    
+    // Only proceed if modal exists
+    if (!modal) {
+        console.error('POI details modal not found in the DOM');
+        return;
+    }
+    
+    // Update modal content
+    if (poiName) poiName.textContent = poi.name;
+    
+    // Show the modal
+    modal.style.display = 'block';
+    
+    // Load fun facts
+    if (poi.id) {
+        loadFunFacts(poi.id);
     }
 }

@@ -4,6 +4,11 @@ import itertools
 import os
 import matplotlib.pyplot as plt
 from pathlib import Path
+from importlib import import_module
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
 
 def get_graph_path(city):
     """Return the path for a city's graph file."""
@@ -35,33 +40,81 @@ def save_graph(G, city="paris"):
         pickle.dump(G, f)
     print(f"Graph saved to {file_path}")
 
-def load_graph(city="paris"):
-    """Load a city graph from disk."""
-    file_path = get_graph_path(city)
+def check_city_graph_exists(city):
+    """Check if a graph for the given city already exists"""
+    graph_path_graphml = os.path.join(os.path.dirname(__file__), f"{city}.graphml")
+    graph_path_pkl = os.path.join(os.path.dirname(__file__), f"{city}_graph.pkl")
     
-    # Special case for Paris
-    if city.lower() == "paris":
+    exists_graphml = os.path.exists(graph_path_graphml)
+    exists_pkl = os.path.exists(graph_path_pkl)
+    
+    logger.debug(f"Graph existence check for {city}: graphml={exists_graphml}, pkl={exists_pkl}")
+    
+    return exists_graphml or exists_pkl
+
+def load_graph(city):
+    """Load city graph and return it"""
+    logger.info(f"Loading graph for {city}")
+    
+    # First try to load from .graphml file
+    graph_path_graphml = os.path.join(os.path.dirname(__file__), f"{city}.graphml")
+    graph_path_pkl = os.path.join(os.path.dirname(__file__), f"{city}_graph.pkl")
+    
+    # Check for .graphml file
+    if os.path.exists(graph_path_graphml):
         try:
-            # Try to create the Paris graph directly
-            from data.paris_graph import create_graph as create_paris_graph
-            from data.paris_graph import save_graph as save_paris_graph
-            G = create_paris_graph()
-            # Save it if not already saved
-            if not os.path.exists(file_path):
-                save_graph(G, city)
-            return G
+            logger.info(f"Loading {city} graph from file: {graph_path_graphml}")
+            return nx.read_graphml(graph_path_graphml)
         except Exception as e:
-            print(f"Error loading Paris graph: {e}")
-            # Continue to try loading from file
+            logger.error(f"Error loading {city} graph from graphml file: {str(e)}")
     
-    # Check if file exists
-    if not os.path.exists(file_path):
-        return None
+    # Check for .pkl file
+    if os.path.exists(graph_path_pkl):
+        try:
+            logger.info(f"Loading {city} graph from pickle file: {graph_path_pkl}")
+            with open(graph_path_pkl, 'rb') as f:
+                return pickle.load(f)
+        except Exception as e:
+            logger.error(f"Error loading {city} graph from pickle file: {str(e)}")
+    
+    # If file doesn't exist, try all possible paths
+    possible_paths = [
+        os.path.join(os.path.dirname(__file__), f"{city}.pkl"),
+        os.path.join(os.path.dirname(__file__), f"{city.lower()}_graph.pkl"),
+        os.path.join(os.path.dirname(__file__), f"{city.lower()}.pkl"),
+        os.path.join(os.path.dirname(__file__), f"{city}.pickle"),
+        os.path.join(os.path.dirname(__file__), f"{city.lower()}.pickle")
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            try:
+                logger.info(f"Loading {city} graph from alternate file: {path}")
+                with open(path, 'rb') as f:
+                    return pickle.load(f)
+            except Exception as e:
+                logger.error(f"Error loading from {path}: {str(e)}")
+    
+    # Last resort, try to import from module
+    try:
+        module_name = f"data.{city}_graph"
+        logger.info(f"Attempting to import {module_name}")
         
-    with open(file_path, "rb") as f:
-        G = pickle.load(f)
-    print(f"Graph loaded for {city}")
-    return G
+        module = import_module(module_name)
+        
+        if hasattr(module, 'get_graph'):
+            logger.info(f"Using get_graph() from {module_name}")
+            return module.get_graph()
+        elif hasattr(module, 'create_graph'):
+            logger.info(f"Using create_graph() from {module_name}")
+            return module.create_graph()
+        else:
+            logger.warning(f"No graph creation function found in {module_name}")
+            return None
+            
+    except ImportError as e:
+        logger.error(f"Error loading {city} graph: {str(e)}")
+        return None
 
 def display_graph_window(G, city="Unknown City"):
     """Display a visualization of the city graph."""
@@ -95,10 +148,3 @@ def display_graph_window(G, city="Unknown City"):
     plt.ylabel("Latitude")
     plt.axis("equal")
     plt.show()
-
-# Import Paris data for backward compatibility
-# from data.paris_graph import known_locations as paris_locations
-
-# def get_paris_graph():
-#     """Legacy function to maintain compatibility with existing code."""
-#     return create_graph(paris_locations, "paris")

@@ -16,9 +16,15 @@ class TouristItinerarySolver:
     
     def __init__(self, city="paris", graph=None, start_time="09:00", end_time="19:00", 
                  mandatory_visits=None, api_key=None, max_neighbors=3,
-                 mandatory_restaurant=True, restaurant_count=1):
+                 mandatory_restaurant=True, restaurant_count=1, max_pois=6):
         """Initialize the solver with tour parameters."""
         self.city = city.lower()
+        
+        # Add these missing attributes
+        self.max_pois = max_pois
+        self.visit_duration = {}
+        self.original_visit_duration = {}
+        self.start_time_minutes = self._time_to_minutes(start_time)
         
         # Try to load the city graph
         if graph is None:
@@ -342,8 +348,12 @@ class TouristItinerarySolver:
         
         return c * r
     
-    def solve(self, max_pois=10):
+    def solve(self, max_pois=None):
         """Solve the Tourist Trip Design Problem using CP-SAT solver."""
+        # Use instance max_pois if none provided
+        if max_pois is None:
+            max_pois = self.max_pois
+            
         # Ensure all POIs have integer IDs
         pois = []
         for node in self.graph.nodes():
@@ -713,3 +723,52 @@ class TouristItinerarySolver:
         hours = minutes // 60
         mins = minutes % 60
         return f"{hours:02d}:{mins:02d}"
+
+    def _convert_itinerary_to_dict(self, itinerary):
+        """Convert the solver's itinerary to a dictionary format for the API"""
+        result = []
+        
+        for i, (poi_id, arrival, departure) in enumerate(itinerary):
+            poi_data = self.graph.nodes[poi_id]
+            
+            # Format times as strings
+            arrival_time = self._minutes_to_time_str(arrival + self.start_time)
+            departure_time = self._minutes_to_time_str(departure + self.start_time)
+            
+            # Add the POI to the result
+            poi_entry = {
+                'id': poi_id,
+                'name': poi_data.get('Nom', f'POI {poi_id}'),
+                'type': poi_data.get('Type', 'attraction'),
+                'start_time': arrival_time,
+                'end_time': departure_time,
+                'visit_duration': departure - arrival
+            }
+            
+            # Add travel info if not the last POI
+            if i < len(itinerary) - 1:
+                next_poi_id, _, _ = itinerary[i+1]
+                
+                # Get transport mode and time
+                try:
+                    if 'selected_mode' in self.graph[poi_id][next_poi_id]:
+                        transport_mode = self.graph[poi_id][next_poi_id]['selected_mode']
+                    else:
+                        transport_mode = self._select_preferred_transport_mode(poi_id, next_poi_id)[0]
+                        
+                    travel_time = self.get_travel_time(poi_id, next_poi_id, transport_mode)
+                    
+                    poi_entry['travel_to_next'] = {
+                        'mode': ["walking", "public transport", "car"][transport_mode],
+                        'time': travel_time
+                    }
+                except Exception as e:
+                    print(f"Error getting travel info: {e}")
+                    poi_entry['travel_to_next'] = {
+                        'mode': "walking", 
+                        'time': 30
+                    }
+                    
+            result.append(poi_entry)
+        
+        return result

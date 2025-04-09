@@ -44,6 +44,12 @@
                         <p class="input-description">Choose 0-2 restaurants to include in your itinerary</p>
                     </div>
                     
+                    <div class="form-group">
+                        <label for="mandatory-pois">Must-Visit Places:</label>
+                        <textarea id="mandatory-pois" name="mandatory_pois" rows="3" class="form-control" placeholder="Enter places you must visit (e.g., Eiffel Tower, Louvre Museum)"></textarea>
+                        <small class="form-text text-muted">List places you definitely want to include in your itinerary</small>
+                    </div>
+                    
                     <button type="submit" id="plan-button">Plan My Itinerary</button>
                 </form>
             </section>
@@ -63,14 +69,32 @@
                 </div>
                 <div id="itinerary-result"></div>
                 <div id="error-message" class="error" style="display: none;"></div>
+                <div id="fun-facts" style="display: none;">
+                    <div id="fun-facts-loading" style="display: none;">Loading fun facts...</div>
+                    <div id="fun-facts-content" style="display: none;"></div>
+                    <div id="fun-facts-error" style="display: none;"></div>
+                </div>
             </section>
         </main>
         
         <footer>
-            <p>© 2023 Tourist Itinerary Planner</p>
+            <p>© 2025 Tourist Itinerary Planner</p>
         </footer>
     </div>
     
     <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize any elements or event listeners here
+            const citySelector = document.getElementById('city-selector');
+            if (citySelector) {
+                citySelector.addEventListener('change', function() {
+                    // ... existing code ...
+                });
+            }
+            
+            // Other initialization code
+        });
+    </script>
 </body>
 </html>
