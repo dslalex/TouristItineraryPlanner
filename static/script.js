@@ -65,6 +65,22 @@ document.addEventListener('DOMContentLoaded', function() {
             mandatory_pois: document.getElementById('mandatory-pois').value
         };
         
+        // Find where the form data is collected and the API request is made
+        // Add the new parameter:
+        const distanceMethod = document.getElementById('distance-calculation').value;
+        const useApiForDistance = distanceMethod === 'api';
+
+        // Add to the data object being sent
+        const requestData = {
+            city: city,
+            start_time: formData.start_time,
+            end_time: formData.end_time,
+            max_pois: formData.max_pois,
+            restaurant_count: formData.restaurant_count,
+            mandatory_pois: formData.mandatory_pois,
+            use_api_for_distance: useApiForDistance
+        };
+        
         // Set itinerary result to not display while loading
         const itineraryResult = document.getElementById('itinerary-result');
         if (itineraryResult) {
@@ -77,7 +93,7 @@ document.addEventListener('DOMContentLoaded', function() {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(formData),
+            body: JSON.stringify(requestData),
         })
         .then(response => response.json())
         .then(data => {

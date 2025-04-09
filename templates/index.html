@@ -50,6 +50,15 @@
                         <small class="form-text text-muted">List places you definitely want to include in your itinerary</small>
                     </div>
                     
+                    <div class="form-group">
+                        <label for="distance-calculation">Distance Calculation Method:</label>
+                        <select id="distance-calculation" name="distance_calculation" class="form-control">
+                            <option value="api">API (More Accurate)</option>
+                            <option value="haversine">Haversine Formula (Faster)</option>
+                        </select>
+                        <p class="input-description">API uses external services for accurate travel times, Haversine uses direct distance calculation</p>
+                    </div>
+                    
                     <button type="submit" id="plan-button">Plan My Itinerary</button>
                 </form>
             </section>

@@ -17,7 +17,7 @@ class TouristItinerarySolver:
     
     def __init__(self, city="paris", graph=None, start_time="09:00", end_time="19:00", 
                  mandatory_visits=None, api_key=None, max_neighbors=3,
-                 mandatory_restaurant=True, restaurant_count=1, max_pois=6):
+                 mandatory_restaurant=True, restaurant_count=1, max_pois=6, use_api_for_distance=True):
         """Initialize the solver with tour parameters."""
         self.city = city.lower()
         
@@ -78,8 +78,11 @@ class TouristItinerarySolver:
         self.walking_threshold = 1.0  # km
         self.public_transport_threshold = 5.0  # km
         
-        # Create distance calculator
-        self.distance_calculator = DistanceCalculator(api_key)
+        # Add the parameter to the constructor
+        self.use_api_for_distance = use_api_for_distance
+        
+        # Initialize distance calculator with the parameter
+        self.distance_calculator = DistanceCalculator(api_key=api_key, use_api=use_api_for_distance)
         
         # Precompute nearest neighbors for each POI to reduce API calls
         self.nearest_neighbors = self._precompute_nearest_neighbors()
@@ -473,10 +476,10 @@ class TouristItinerarySolver:
         
         # ==== Phase 5: Restaurant scheduling constraints ====
         # Define meal time periods
-        lunch_start = self._time_to_minutes("11:30") - self.start_time
-        lunch_end = self._time_to_minutes("14:00") - self.start_time
-        dinner_start = self._time_to_minutes("18:00") - self.start_time
-        dinner_end = self._time_to_minutes("21:00") - self.start_time
+        lunch_start = self._time_to_minutes("12:00") - self.start_time
+        lunch_end = self._time_to_minutes("13:00") - self.start_time
+        dinner_start = self._time_to_minutes("19:00") - self.start_time
+        dinner_end = self._time_to_minutes("20:00") - self.start_time
         
         if restaurant_pois:
             # Variables for lunch and dinner visits

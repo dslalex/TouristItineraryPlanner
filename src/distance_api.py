@@ -6,9 +6,10 @@ import os
 class DistanceCalculator:
     """Calculates travel times between POIs using OpenAI API."""
     
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, use_api=True):
         """Initialize the distance calculator with API key."""
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        self.use_api = use_api
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
             
@@ -25,6 +26,12 @@ class DistanceCalculator:
         if cache_key in self.cache:
             return self.cache[cache_key]
             
+        # If not using API, directly use Haversine formula
+        if not self.use_api:
+            travel_time = self._fallback_travel_time(origin, destination, mode)
+            self.cache[cache_key] = travel_time
+            return travel_time
+        
         # Define mode of transportation
         mode_str = ["walking", "public transport", "car"][mode]
         

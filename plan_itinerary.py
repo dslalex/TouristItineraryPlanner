@@ -145,13 +145,12 @@ Do not include any explanation or additional text in your response, only the JSO
         logger.error(traceback.format_exc())
         return []
 
-def plan_itinerary(city, start_time="08:00", end_time="22:00", max_pois=6, restaurant_count=1, api_key=None, mandatory_poi_ids=None):
+def plan_itinerary(city, start_time="08:00", end_time="22:00", max_pois=6, restaurant_count=1, api_key=None, mandatory_poi_ids=None, use_api_for_distance=True):
     """Plan a tourist itinerary and return the results"""
     logger.info(f"Planning itinerary for {city}")
     logger.info(f"Time window: {start_time} - {end_time}")
     logger.info(f"Max POIs: {max_pois}, Restaurant count: {restaurant_count}")
-    if mandatory_poi_ids:
-        logger.info(f"Mandatory POIs: {mandatory_poi_ids}")
+    logger.info(f"Using API for distance calculation: {use_api_for_distance}")
     
     try:
         # Default to an empty list if mandatory_poi_ids is None
@@ -168,7 +167,8 @@ def plan_itinerary(city, start_time="08:00", end_time="22:00", max_pois=6, resta
             max_neighbors=3,
             mandatory_restaurant=True if restaurant_count > 0 else False,
             restaurant_count=restaurant_count,
-            max_pois=max_pois
+            max_pois=max_pois,
+            use_api_for_distance=use_api_for_distance  # Add this parameter
         )
         
                 # Solve the problem
@@ -214,6 +214,7 @@ def api_plan():
         max_pois = int(data.get('max_pois', 6))
         restaurant_count = int(data.get('restaurant_count', 1))
         mandatory_pois_text = data.get('mandatory_pois', '').strip()
+        use_api_for_distance = data.get('use_api_for_distance', True)
         
         logger.info(f"Planning itinerary for {city} from {start_time} to {end_time}")
         logger.info(f"Max POIs: {max_pois}, Restaurant count: {restaurant_count}")
@@ -241,7 +242,7 @@ def api_plan():
             # Now that the graph should exist, identify mandatory POIs
             mandatory_poi_ids = identify_mandatory_pois(city, mandatory_pois_text, api_key)
             logger.info(f"Identified mandatory POI IDs: {mandatory_poi_ids}")
-            
+            print("ici")
             # If we found mandatory POIs, re-run the planner to include them
             if mandatory_poi_ids:
                 logger.info(f"Re-planning itinerary with mandatory POIs: {mandatory_poi_ids}")
@@ -252,7 +253,8 @@ def api_plan():
                     max_pois, 
                     restaurant_count, 
                     api_key, 
-                    mandatory_poi_ids
+                    mandatory_poi_ids,
+                    use_api_for_distance  # Add this parameter
                 )
         else:
             # If no mandatory POIs, just plan the itinerary
@@ -262,7 +264,8 @@ def api_plan():
                 end_time, 
                 max_pois, 
                 restaurant_count, 
-                api_key
+                api_key,
+                use_api_for_distance  # Add this parameter
             )
         
         logger.info("Itinerary planning completed successfully")
