@@ -354,34 +354,40 @@ class TouristItinerarySolver:
         # Calculate walking time
         walking_time = int(distance_km * 12 * 1.3)  # 5 km/h with 1.3x penalty factor
         
+        # Initialize times with defaults based on distance (will be overridden if API is used)
+        public_transport_time = int(distance_km * 4)  # ~15 km/h average including stops
+        car_time = int(distance_km * 2)  # ~30 km/h average in cities with traffic
+        
         # Fast decision for very short distances - choose walking
         if distance_km <= self.walking_threshold and walking_time <= 25:  # 25 min is reasonable walking time
             chosen_mode = 0
             chosen_time = walking_time
         else:
             # For medium/long distances, compare public transport and car
-            public_transport_time = None
-            car_time = None
             
             # Only query if using API and needed
             if self.use_api_for_distance:
-                origin = self.graph.nodes[poi_i]
-                destination = self.graph.nodes[poi_j]
-                
-                # Get public transport time
-                public_transport_time = self.distance_calculator.get_travel_time(origin, destination, 1)
-                
-                # Get car time if needed
-                if distance_km > self.walking_threshold:
-                    car_time = self.distance_calculator.get_travel_time(origin, destination, 2)
-            else:
-                # Fallback time estimates without API
-                public_transport_time = int(distance_km * 4)  # ~15 km/h average including stops
-                car_time = int(distance_km * 2)  # ~30 km/h average in cities with traffic
+                try:
+                    origin = self.graph.nodes[poi_i]
+                    destination = self.graph.nodes[poi_j]
+                    
+                    # Get public transport time
+                    api_public_time = self.distance_calculator.get_travel_time(origin, destination, 1)
+                    if api_public_time is not None:
+                        public_transport_time = api_public_time
+                    
+                    # Get car time if needed
+                    if distance_km > self.walking_threshold:
+                        api_car_time = self.distance_calculator.get_travel_time(origin, destination, 2)
+                        if api_car_time is not None:
+                            car_time = api_car_time
+                except Exception as e:
+                    print(f"Error getting travel times for {poi_i}->{poi_j}: {str(e)}")
+                    # Will use the default times initialized above
             
             # Decision logic
             # Apply 3x penalty to car for environmental/cost reasons
-            penalized_car_time = car_time * 3 if car_time is not None else float('inf')
+            penalized_car_time = car_time * 3
             
             # Priority 2: Public transport for medium distances (unless car is much better)
             if distance_km <= self.public_transport_threshold:
