@@ -149,17 +149,38 @@ def plan_itinerary(city, start_time="08:00", end_time="22:00", max_pois=6, resta
     """Plan a tourist itinerary and return the results"""
     logger.info(f"Planning itinerary for {city}")
     logger.info(f"Time window: {start_time} - {end_time}")
-    logger.info(f"Max POIs: {max_pois}, Restaurant count: {restaurant_count}")
-    logger.info(f"Using API for distance calculation: {use_api_for_distance}")
     
     try:
         # Default to an empty list if mandatory_poi_ids is None
         if mandatory_poi_ids is None:
             mandatory_poi_ids = []
+        
+        # Try to load the graph with cached travel times
+        from data.city_graph import load_graph
+        graph = load_graph(city.lower())
+        
+        # Verify graph loaded correctly with travel times
+        if graph is not None:
+            edge_count = 0
+            edges_with_travel_times = 0
             
+            for u, v in graph.edges():
+                edge_count += 1
+                if 'travel_time' in graph[u][v]:
+                    edges_with_travel_times += 1
+            
+            # Define has_travel_times variable based on coverage percentage
+            has_travel_times = edge_count > 0 and edges_with_travel_times / edge_count >= 0.5
+            logger.info(f"Loaded graph with {edges_with_travel_times}/{edge_count} edges having travel times")
+            logger.info(f"Has sufficient travel times: {has_travel_times}")
+        else:
+            # If no graph was loaded, we definitely don't have travel times
+            has_travel_times = False
+        
         logger.debug("Initializing TouristItinerarySolver")
         solver = TouristItinerarySolver(
             city=city,
+            graph=graph,  # Pass the loaded graph
             start_time=start_time, 
             end_time=end_time,
             mandatory_visits=mandatory_poi_ids,
@@ -168,10 +189,10 @@ def plan_itinerary(city, start_time="08:00", end_time="22:00", max_pois=6, resta
             mandatory_restaurant=True if restaurant_count > 0 else False,
             restaurant_count=restaurant_count,
             max_pois=max_pois,
-            use_api_for_distance=use_api_for_distance  # Add this parameter
+            use_api_for_distance=use_api_for_distance and not has_travel_times  # Skip API if we have cached times
         )
         
-                # Solve the problem
+        # Solve the problem
         itinerary = solver.solve(max_pois=max_pois)
         
         # Format the itinerary

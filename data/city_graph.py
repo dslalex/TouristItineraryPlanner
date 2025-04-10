@@ -30,15 +30,35 @@ def create_graph(locations, city="paris"):
     
     return G
 
-def save_graph(G, city="paris"):
-    """Save a city graph to disk."""
-    file_path = get_graph_path(city)
-    # Create directory if it doesn't exist
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+def save_graph(city, graph, force_save=True):
+    """Save city graph to a pickle file."""
+    # Create the directory if it doesn't exist
+    graph_dir = os.path.join(os.path.dirname(__file__), 'city_graphs')
+    os.makedirs(graph_dir, exist_ok=True)
     
-    with open(file_path, "wb") as f:
-        pickle.dump(G, f)
-    print(f"Graph saved to {file_path}")
+    # Define the file path
+    pickle_path = os.path.join(graph_dir, f'{city.lower()}_graph.pkl')
+    
+    # Count edges with travel times before saving
+    edges_with_times = 0
+    total_edges = 0
+    for u, v in graph.edges():
+        total_edges += 1
+        if 'travel_time' in graph[u][v]:
+            edges_with_times += 1
+    
+    print(f"Saving graph with {edges_with_times}/{total_edges} edges having travel times ({edges_with_times/total_edges*100:.1f}%)")
+    
+    # Save the graph
+    with open(pickle_path, 'wb') as f:
+        pickle.dump(graph, f)
+    
+    print(f"Saved graph for {city} to {pickle_path}")
+    
+    # Also save to the city_graphs subdirectory
+    alt_path = os.path.join(os.path.dirname(__file__), f'{city.lower()}_graph.pkl')
+    with open(alt_path, 'wb') as f:
+        pickle.dump(graph, f)
 
 def check_city_graph_exists(city):
     """Check if a graph for the given city already exists"""
@@ -53,7 +73,28 @@ def check_city_graph_exists(city):
     return exists_graphml or exists_pkl
 
 def load_graph(city):
-    """Load city graph and return it"""
+    """Load city graph and return it."""
+    # First look in the city_graphs directory
+    pickle_path = os.path.join(os.path.dirname(__file__), 'city_graphs', f'{city.lower()}_graph.pkl')
+    
+    if os.path.exists(pickle_path):
+        try:
+            with open(pickle_path, 'rb') as f:
+                graph = pickle.load(f)
+                
+            # Count edges with travel times
+            edges_with_times = 0
+            total_edges = 0
+            for u, v in graph.edges():
+                total_edges += 1
+                if 'travel_time' in graph[u][v]:
+                    edges_with_times += 1
+                    
+            print(f"Loaded graph for {city} with {edges_with_times}/{total_edges} edges having travel times ({edges_with_times/total_edges*100:.1f}%)")
+            return graph
+        except Exception as e:
+            print(f"Error loading graph from {pickle_path}: {str(e)}")
+    
     logger.info(f"Loading graph for {city}")
     
     # First try to load from .graphml file

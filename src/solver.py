@@ -84,8 +84,19 @@ class TouristItinerarySolver:
         # Initialize distance calculator with the parameter
         self.distance_calculator = DistanceCalculator(api_key=api_key, use_api=use_api_for_distance)
         
-        # Precompute nearest neighbors for each POI to reduce API calls
-        self.nearest_neighbors = self._precompute_nearest_neighbors()
+        # Try to load cached nearest neighbors
+        if hasattr(self.graph, 'graph') and 'nearest_neighbors' in self.graph.graph:
+            print("Loading cached nearest neighbors")
+            self.nearest_neighbors = self.graph.graph['nearest_neighbors'] 
+            self.max_neighbors = len(next(iter(self.nearest_neighbors.values()))) if self.nearest_neighbors else 3
+            print(f"Using {len(self.nearest_neighbors)} cached neighbor relationships")
+        else:
+            print("Computing nearest neighbors")
+            self.nearest_neighbors = self._precompute_nearest_neighbors()
+            # Save to graph metadata
+            if not hasattr(self.graph, 'graph'):
+                self.graph.graph = {}
+            self.graph.graph['nearest_neighbors'] = self.nearest_neighbors
         
         print(f"Precomputed {max_neighbors} nearest neighbors for each POI")
         print(f"Transport mode preferences: Walk -> Public Transport -> Car")
@@ -199,7 +210,97 @@ class TouristItinerarySolver:
         
         return nearest_neighbors
     
-    def get_travel_time(self, poi_i, poi_j, mode=None):
+    def _precompute_travel_times(self, pois):
+        """Precompute only the optimal transport mode and time between POIs."""
+        print(f"Checking travel times for {len(pois)} POIs...")
+        
+        # Debug: check how many edges already have travel times
+        edge_count = 0
+        edges_with_cached_times = 0
+        for i in pois:
+            for j in pois:
+                if i != j and i in self.graph and j in self.graph[i]:
+                    edge_count += 1
+                    if 'travel_time' in self.graph[i][j]:
+                        edges_with_cached_times += 1
+        print(f"DEBUG: Found {edges_with_cached_times}/{edge_count} edges with cached travel times in the full graph")
+        
+        # Track which connections we need to compute
+        missing_connections = []
+        total_edges = 0
+        edges_with_times = 0
+        
+        # First, ensure we have connections for all mandatory POIs
+        mandatory_connections = set()
+        if self.mandatory_visits:
+            print(f"Adding connections for {len(self.mandatory_visits)} mandatory POIs")
+            # This creates an excessive number of connections
+            for mandatory_poi in self.mandatory_visits:
+                for other_poi in pois:
+                    if mandatory_poi != other_poi:
+                        mandatory_connections.add((mandatory_poi, other_poi))
+                        mandatory_connections.add((other_poi, mandatory_poi))
+        
+        # Process both nearest neighbors and mandatory connections
+        for i in pois:
+            for j in pois:
+                if i == j:
+                    continue
+                    
+                # Check if this is either a nearest neighbor or a mandatory connection
+                is_neighbor = j in self.nearest_neighbors.get(i, [])
+                is_mandatory = (i, j) in mandatory_connections
+                
+                if not (is_neighbor or is_mandatory):
+                    continue
+                    
+                total_edges += 1
+                
+                # Check if we already have a selected travel mode and time
+                if ('selected_mode' in self.graph[i][j] and 
+                    'travel_time' in self.graph[i][j]):
+                    edges_with_times += 1
+                    continue
+                    
+                # If we need to compute this connection, add it to our list
+                missing_connections.append((i, j))
+        
+        print(f"Found {edges_with_times}/{total_edges} edges with travel times")
+        print(f"Need to compute {len(missing_connections)} connections")
+        
+        # Process missing connections in batches
+        if missing_connections:
+            batch_size = 10
+            for idx in range(0, len(missing_connections), batch_size):
+                batch = missing_connections[idx:idx + batch_size]
+                
+                # Track connections we've already processed to avoid duplicates
+                processed_connections = set()
+
+                for i, j in batch:
+                    # Skip if we've already computed the reverse connection
+                    if (j, i) in processed_connections:
+                        # Reuse the reverse travel time and mode
+                        self.graph[i][j]['selected_mode'] = self.graph[j][i]['selected_mode'] 
+                        self.graph[i][j]['travel_time'] = self.graph[j][i]['travel_time']
+                        continue
+                        
+                    # Mark this connection as processed
+                    processed_connections.add((i, j))
+                    
+                    # Compute travel time normally
+                    mode, time = self._select_preferred_transport_mode(i, j)
+                    self.graph[i][j]['selected_mode'] = mode
+                    self.graph[i][j]['travel_time'] = time
+        
+        # Save the updated graph
+        from data.city_graph import save_graph
+        save_graph(self.city, self.graph)
+        
+        print(f"Completed travel time computation with {self.distance_calculator.request_count} API requests")
+    
+    def get_travel_time(self, poi_i, poi_j):
+        """Get travel time between two POIs using the cached or computed optimal mode."""
         # Ensure POI IDs are integers
         poi_i = int(poi_i)
         poi_j = int(poi_j)
@@ -208,52 +309,29 @@ class TouristItinerarySolver:
         if poi_i == poi_j:
             return 0
         
-        # Special handling for mandatory POIs - always allow connections to them
+        # Special handling for mandatory POIs - always allow connections
         if poi_j in self.mandatory_visits or poi_i in self.mandatory_visits:
-            # Pass through to mode selection without nearest neighbor check
-            pass
-        # Regular nearest neighbor check for non-mandatory POIs
+            # If not precomputed, compute on-the-fly
+            if ('selected_mode' not in self.graph[poi_i][poi_j] or 
+                'travel_time' not in self.graph[poi_i][poi_j]):
+                mode, time = self._select_preferred_transport_mode(poi_i, poi_j)
+                self.graph[poi_i][poi_j]['selected_mode'] = mode
+                self.graph[poi_i][poi_j]['travel_time'] = time
+            return self.graph[poi_i][poi_j]['travel_time']
+        
+        # Regular nearest neighbor check for non-mandatory POIs  
         elif poi_j not in self.nearest_neighbors.get(poi_i, []):
             return 9999  # Large penalty value
         
-        # Handle mode selection or default
-        if mode is None:
-            preferred_mode, travel_time = self._select_preferred_transport_mode(poi_i, poi_j)
-            return travel_time
-        
-        mode_index = mode
-        if isinstance(mode, str):
-            mode_map = {"walking": 0, "public_transport": 1, "car": 2}
-            mode_index = mode_map.get(mode.lower(), 0)
-        
-        if not isinstance(mode_index, int) or mode_index < 0 or mode_index > 2:
-            print(f"Warning: Invalid mode_index {mode_index}, defaulting to 0")
-            mode_index = 0
-        
-        if 'travel_times' not in self.graph[poi_i][poi_j]:
-            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
-        
-        # For walking (mode_index 0), calculate time based on haversine distance
-        if mode_index == 0 and self.graph[poi_i][poi_j]['travel_times'][mode_index] is None:
-            # Calculate walking time based on distance (average walking speed ~5 km/h)
-            distance_km = self._calculate_haversine_distance(
-                self.graph.nodes[poi_i]['latitude'], 
-                self.graph.nodes[poi_j]['longitude'],
-                self.graph.nodes[poi_j]['latitude'], 
-                self.graph.nodes[poi_j]['longitude']
-            )
-            # Apply a 1.3x penalty factor to account for non-straight paths
-            # 5 km/h = 12 minutes per km, multiply by penalty factor
-            walking_time = int(distance_km * 12 * 1.3)
-            self.graph[poi_i][poi_j]['travel_times'][mode_index] = walking_time
-        # For other transport modes, use the API
-        elif self.graph[poi_i][poi_j]['travel_times'][mode_index] is None:
-            origin = self.graph.nodes[poi_i]
-            destination = self.graph.nodes[poi_j]
-            travel_time = self.distance_calculator.get_travel_time(origin, destination, mode_index)
-            self.graph[poi_i][poi_j]['travel_times'][mode_index] = travel_time
-        
-        return self.graph[poi_i][poi_j]['travel_times'][mode_index]
+        # Return cached time or compute if needed
+        if 'travel_time' in self.graph[poi_i][poi_j]:
+            return self.graph[poi_i][poi_j]['travel_time']
+        else:
+            # Compute and cache the preferred transport mode and time
+            mode, time = self._select_preferred_transport_mode(poi_i, poi_j)
+            self.graph[poi_i][poi_j]['selected_mode'] = mode
+            self.graph[poi_i][poi_j]['travel_time'] = time
+            return time
 
     def _select_preferred_transport_mode(self, poi_i, poi_j):
         """Select the preferred transport mode based on distance and travel time heuristics."""
@@ -261,13 +339,11 @@ class TouristItinerarySolver:
         poi_i = int(poi_i)
         poi_j = int(poi_j)
         
-        # Initialize travel_times if it doesn't exist
-        if 'travel_times' not in self.graph[poi_i][poi_j]:
-            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]  # One slot for each transport mode
+        # If already computed, return stored values
+        if 'selected_mode' in self.graph[poi_i][poi_j] and 'travel_time' in self.graph[poi_i][poi_j]:
+            return self.graph[poi_i][poi_j]['selected_mode'], self.graph[poi_i][poi_j]['travel_time']
         
-        travel_times = self.graph[poi_i][poi_j]['travel_times']
-        
-        # Calculate haversine distance first
+        # Calculate haversine distance
         distance_km = self._calculate_haversine_distance(
             self.graph.nodes[poi_i]['latitude'], 
             self.graph.nodes[poi_i]['longitude'],
@@ -275,66 +351,72 @@ class TouristItinerarySolver:
             self.graph.nodes[poi_j]['longitude']
         )
         
-        # For walking, always calculate time based on distance instead of using API
-        if travel_times[0] is None:
-            # Calculate walking time: 5 km/h = 12 minutes per km, with 1.3x penalty factor
-            walking_time = int(distance_km * 12 * 1.3)
-            travel_times[0] = walking_time
+        # Calculate walking time
+        walking_time = int(distance_km * 12 * 1.3)  # 5 km/h with 1.3x penalty factor
         
-        # Fast decision for very short distances - choose walking without API calls
-        if distance_km <= self.walking_threshold:
-            walk_time = travel_times[0]
-            if walk_time <= 25:  # 25 minutes is reasonable walking time
-                # Store the selected transport mode
-                self.graph[poi_i][poi_j]['selected_mode'] = 0
-                mode_names = ["walking", "public transport", "car"]
-                #print(f"Selected {mode_names[0]} for travel from {self.graph.nodes[poi_i]['Nom']} to {self.graph.nodes[poi_j]['Nom']}")
-                return 0, walk_time
-        
-        # For other transport modes, calculate only if needed
-        for mode_idx in range(1, 3):  # Skip walking (mode_idx 0)
-            if travel_times[mode_idx] is None:
+        # Fast decision for very short distances - choose walking
+        if distance_km <= self.walking_threshold and walking_time <= 25:  # 25 min is reasonable walking time
+            chosen_mode = 0
+            chosen_time = walking_time
+        else:
+            # For medium/long distances, compare public transport and car
+            public_transport_time = None
+            car_time = None
+            
+            # Only query if using API and needed
+            if self.use_api_for_distance:
                 origin = self.graph.nodes[poi_i]
                 destination = self.graph.nodes[poi_j]
-                travel_times[mode_idx] = self.distance_calculator.get_travel_time(origin, destination, mode_idx)
-        
-        # Create a copy of travel times with car penalty for decision making
-        decision_travel_times = travel_times.copy()
-        # Apply 3x penalty to car travel time in the decision calculation
-        if decision_travel_times[2] is not None:
-            decision_travel_times[2] = decision_travel_times[2] * 3
-        
-        # Get chosen transport mode and travel time
-        chosen_mode = 1  # Default to public transport
-        chosen_time = travel_times[1]
-        
-        # Priority 2: Public transport for medium distances
-        if distance_km <= self.public_transport_threshold:
-            # Compare public transport with penalized car time
-            if decision_travel_times[1] <= decision_travel_times[2]:
-                chosen_mode = 1
-                chosen_time = travel_times[1]
+                
+                # Get public transport time
+                public_transport_time = self.distance_calculator.get_travel_time(origin, destination, 1)
+                
+                # Get car time if needed
+                if distance_km > self.walking_threshold:
+                    car_time = self.distance_calculator.get_travel_time(origin, destination, 2)
             else:
-                chosen_mode = 2
-                chosen_time = travel_times[2]
-        
-        # Priority 3: Car for longer distances, but only if significantly better than public transport
-        else:
-            if decision_travel_times[2] < decision_travel_times[1]:
-                chosen_mode = 2
-                chosen_time = travel_times[2]
+                # Fallback time estimates without API
+                public_transport_time = int(distance_km * 4)  # ~15 km/h average including stops
+                car_time = int(distance_km * 2)  # ~30 km/h average in cities with traffic
+            
+            # Decision logic
+            # Apply 3x penalty to car for environmental/cost reasons
+            penalized_car_time = car_time * 3 if car_time is not None else float('inf')
+            
+            # Priority 2: Public transport for medium distances (unless car is much better)
+            if distance_km <= self.public_transport_threshold:
+                if public_transport_time <= penalized_car_time:
+                    chosen_mode = 1
+                    chosen_time = public_transport_time
+                else:
+                    chosen_mode = 2
+                    chosen_time = car_time
+            # Priority 3: Car for longer distances (if significantly better)
             else:
-                chosen_mode = 1
-                chosen_time = travel_times[1]
+                if penalized_car_time < public_transport_time:
+                    chosen_mode = 2
+                    chosen_time = car_time
+                else:
+                    chosen_mode = 1
+                    chosen_time = public_transport_time
+
+        # Make sure we store edge data consistently - ALWAYS use these keys:
+        # Initialize travel_times array if needed
+        if 'travel_times' not in self.graph[poi_i][poi_j]:
+            self.graph[poi_i][poi_j]['travel_times'] = [None, None, None]
         
-        # Log the chosen transport mode
-        mode_names = ["walking", "public transport", "car"]
-        #print(f"Selected {mode_names[chosen_mode]} for travel from {self.graph.nodes[poi_i]['Nom']} to {self.graph.nodes[poi_j]['Nom']}")
-        
-        # Store the selected transport mode
+        # Store all calculated travel times by mode
+        if walking_time:
+            self.graph[poi_i][poi_j]['travel_times'][0] = walking_time
+        if public_transport_time:
+            self.graph[poi_i][poi_j]['travel_times'][1] = public_transport_time
+        if car_time:
+            self.graph[poi_i][poi_j]['travel_times'][2] = car_time
+            
+        # Now store the selected mode and time
         self.graph[poi_i][poi_j]['selected_mode'] = chosen_mode
+        self.graph[poi_i][poi_j]['travel_time'] = chosen_time
         
-        # Return both the chosen mode and the travel time
         return chosen_mode, chosen_time
 
     def _calculate_haversine_distance(self, lat1, lon1, lat2, lon2):
@@ -355,12 +437,6 @@ class TouristItinerarySolver:
         return c * r
     
     def solve(self, max_pois=None):
-        """Solve the Tourist Trip Design Problem using an optimized algorithm from research.
-        
-        This implementation is based on the algorithm presented in the research paper
-        which uses a two-phase approach: first selecting POIs based on interest scores
-        and then optimizing their sequence with time window constraints.
-        """
         # Use instance max_pois if none provided
         if max_pois is None:
             max_pois = self.max_pois
@@ -380,6 +456,10 @@ class TouristItinerarySolver:
         tourist_pois = [i for i in pois if self.graph.nodes[i].get('Type') != "Restaurant"]
         
         print(f"Found {len(restaurant_pois)} restaurants and {len(tourist_pois)} tourist attractions")
+        
+        # Precompute travel times in batch
+        if self.use_api_for_distance:
+            self._precompute_travel_times(pois)
 
         # Initialize the model
         model = cp_model.CpModel()
@@ -712,13 +792,10 @@ class TouristItinerarySolver:
                 # Get the selected transport mode and travel time
                 if 'selected_mode' in self.graph[poi_id][next_poi_id]:
                     selected_mode = self.graph[poi_id][next_poi_id]['selected_mode']
-                else:
-                    selected_mode = 1  # Default to public transport
+                    travel_time = self.graph[poi_id][next_poi_id]['travel_time']  # CHANGE HERE
                     
-                travel_time = self.graph[poi_id][next_poi_id]['travel_times'][selected_mode]
-                
-                transport_mode_str = ["walking", "public transport", "car"][selected_mode]
-                result += f"   Travel to next: {travel_time} minutes by {transport_mode_str}\n"
+                    transport_mode_str = ["walking", "public transport", "car"][selected_mode]
+                    result += f"   Travel to next: {travel_time} minutes by {transport_mode_str}\n"
             
             result += "\n"
             total_interest += poi['Interet']
@@ -782,10 +859,10 @@ class TouristItinerarySolver:
                 try:
                     if 'selected_mode' in self.graph[poi_id][next_poi_id]:
                         transport_mode = self.graph[poi_id][next_poi_id]['selected_mode']
+                        travel_time = self.graph[poi_id][next_poi_id]['travel_time']  # CHANGE HERE
                     else:
-                        transport_mode = self._select_preferred_transport_mode(poi_id, next_poi_id)[0]
-                        
-                    travel_time = self.get_travel_time(poi_id, next_poi_id, transport_mode)
+                        mode, travel_time = self._select_preferred_transport_mode(poi_id, next_poi_id)
+                        transport_mode = mode
                     
                     poi_entry['travel_to_next'] = {
                         'mode': ["walking", "public transport", "car"][transport_mode],
