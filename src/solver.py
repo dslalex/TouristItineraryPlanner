@@ -51,20 +51,28 @@ class TouristItinerarySolver:
         self.end_time = self._time_to_minutes(end_time)
         self.total_available_time = self.end_time - self.start_time
         
-        # Setting visit constraints
-        self.mandatory_visits = mandatory_visits or []
+        # Setting visit constraints - FIXED VERSION
+        if mandatory_visits is None or mandatory_visits is False:
+            self.mandatory_visits = []
+        else:
+            self.mandatory_visits = mandatory_visits
+        
         self.mandatory_restaurant = mandatory_restaurant
         self.restaurant_count = restaurant_count
         
         # Ensure mandatory_visits are integers
         if self.mandatory_visits:
-            new_mandatory = []
-            for poi_id in self.mandatory_visits:
-                try:
-                    new_mandatory.append(int(poi_id))
-                except (ValueError, TypeError):
-                    print(f"Warning: Skipping mandatory visit {poi_id} - not a valid integer")
-            self.mandatory_visits = new_mandatory
+            try:
+                new_mandatory = []
+                for poi_id in self.mandatory_visits:
+                    try:
+                        new_mandatory.append(int(poi_id))
+                    except (ValueError, TypeError):
+                        print(f"Warning: Skipping mandatory visit {poi_id} - not a valid integer")
+                self.mandatory_visits = new_mandatory
+            except TypeError:
+                print(f"Warning: mandatory_visits not iterable, resetting to empty list")
+                self.mandatory_visits = []
             
             # Verify mandatory visits exist in the graph
             for poi_id in self.mandatory_visits:
